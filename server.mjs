@@ -760,7 +760,7 @@ function opencodeHelpers() {
     };
   };
   const agentState = () => {
-    const stop = [...document.querySelectorAll('[aria-label="停止"]')].find(vis);
+    const stop = [...document.querySelectorAll('[aria-label="停止"]')].find(b => vis(b) && !b.disabled);
     return { busy: !!stop, waiting: false, waitingText: '' };
   };
   return {
@@ -789,10 +789,18 @@ function opencodeHelpers() {
     questionTarget: () => null,
     historyPlane: () => null,
     scrollPlane: () => null,
-    sessionTree: () => [],
+    sessionTree: () => {
+      const sessions = [...document.querySelectorAll('[class*="group/session"]')].filter(vis)
+        .map(e => (e.innerText || '').trim().split('\n')[0].trim()).filter(Boolean);
+      return sessions.length ? [{ project: 'opencode', sessions: [...new Set(sessions)] }] : [];
+    },
     sessionTarget: () => null,
     expandMoreOnce: () => 0,
-    projectList: () => [],
+    projectList: () => {
+      const projects = [...document.querySelectorAll('[class*="group/project"]')].filter(vis)
+        .map(e => (e.innerText || '').trim().split('\n')[0].trim()).filter(Boolean);
+      return [...new Set(projects)];
+    },
     newChatTarget: () => null,
   };
 }
