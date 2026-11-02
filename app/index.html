@@ -111,7 +111,6 @@
   #chatTools { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; min-width: 0; }
   #chatTools::-webkit-scrollbar { display: none; }
   #chatTools button { font-size: 12.5px; padding: 3px 10px; border-radius: 14px; flex: none; white-space: nowrap; }
-  #chatTools #pickModel { flex: 0 1 auto; min-width: 84px; overflow: hidden; text-overflow: ellipsis; }
   .row { display: flex; gap: 8px; min-width: 0; align-items: flex-end; }
   textarea { flex: 1; min-width: 0; min-height: 40px; max-height: 32vh; padding: 9px 10px; resize: none; font-size: 16px; line-height: 1.35; }
   #img { flex: none; height: 40px; width: 40px; padding: 0; display: flex; align-items: center; justify-content: center; color: #bbb; }
@@ -252,7 +251,6 @@
 <footer>
   <div id="chatTools">
     <button id="pickMode" hidden></button>
-    <button id="pickModel" hidden></button>
     <button id="pickHistory">历史</button>
     <button id="newChat">＋ 新建</button>
   </div>
@@ -598,6 +596,7 @@ function connect() {
     }
     else if (m.t === 'menu') showMenu(m.kind, m.items, m.max);
     else if (m.t === 'sessionTree') showSessionTree(m.tree);
+    else if (m.t === 'projectList') showProjectList(m.projects);
     else if (m.t === 'params') showParams(m);
     else if (m.t === 'changes') showChanges(m);
     else if (m.t === 'file') showFile(m);
@@ -688,6 +687,13 @@ function openHistorySheet(tree) {
 function showSessionTree(tree) {
   status('');
   openHistorySheet(tree);
+}
+
+function showProjectList(projects) {
+  status('');
+  if (!projects || !projects.length) return status('没有找到项目，可能 Cursor 版本不同', false);
+  openSheet('projectList', `<h3>选择项目，新建对话</h3>`
+    + projects.map(p => `<button class="opt" data-newproj="${esc(p)}"><span class="lbl">${esc(p)}</span><span class="tag">新建</span></button>`).join(''));
 }
 
 function showChanges(m) {
@@ -910,6 +916,12 @@ $('sheet').addEventListener('click', async e => {
     status('正在打开「' + b.dataset.sess + '」…');
     return send({ t: 'openSession', project: b.dataset.proj, name: b.dataset.sess });
   }
+  if (b.dataset.newproj) {
+    closeSheet();
+    cache.clear(); itemsEl.replaceChildren(); lastChat = null;   // 新建对话，清空当前会话
+    status('正在「' + b.dataset.newproj + '」新建对话…');
+    return send({ t: 'newChatIn', project: b.dataset.newproj });
+  }
   if (b.dataset.histidx != null) {   // 点卡片：填入输入框
     const t = sendHistory()[Number(b.dataset.histidx)];
     if (t != null) { closeSheet(); text.value = t; autosize(); status('已填入输入框'); }
@@ -1012,9 +1024,7 @@ function renderChat(chat) {
   $('empty').hidden = !!chat;
   $('older').hidden = !chat;
   $('pickMode').hidden = !chat?.mode;
-  $('pickModel').hidden = !chat?.model;
   if (chat?.mode) $('pickMode').textContent = chat.mode + ' ▾';
-  if (chat?.model) $('pickModel').textContent = chat.model + ' ▾';
   if (!chat) { itemsEl.replaceChildren(); cache.clear(); renderQueue(false, []); renderQuestions(null); return; }
   const stick = nearBottom();
   // Anchor on the first visible item so loading older messages doesn't jump.
@@ -1169,9 +1179,8 @@ document.addEventListener('click', async e => {
 });
 
 $('pickMode').onclick = () => { status('读取模式列表…'); send({ t: 'openMenu', kind: 'mode' }); };
-$('pickModel').onclick = () => { status('读取模型列表…'); send({ t: 'openMenu', kind: 'model' }); };
 $('pickHistory').onclick = () => { status(''); openHistorySheet(null); send({ t: 'sessionTree' }); };
-$('newChat').onclick = () => { send({ t: 'newChat' }); status('已新建对话'); };
+$('newChat').onclick = () => { status('读取项目列表…'); send({ t: 'projectList' }); };
 
 /* ---------- file viewer ---------- */
 $('vBody').classList.toggle('wrap', store.get('wrap') !== 'off');

@@ -237,7 +237,13 @@ function pageHelpers() {
     const p = historyPlane();
     if (!p) return null;
     const before = p.scrollTop;
+    // Disable smooth scrolling while we move, so the jump is instant. Cursor's virtualized plane may
+    // use scroll-behavior:smooth, which would otherwise animate every step and make the panel look
+    // like it keeps scrolling on the desktop.
+    const prev = p.style.scrollBehavior;
+    p.style.scrollBehavior = 'auto';
     p.scrollTop = Math.max(0, before + (Number(delta) || 0));
+    p.style.scrollBehavior = prev;
     return { top: p.scrollTop, height: p.scrollHeight, clientHeight: p.clientHeight };
   };
   const findPanel = () => {
@@ -654,9 +660,30 @@ function pageHelpers() {
     more.click();
     return 1;
   };
+  // Project names only (no side effects, no "More" expansion).
+  const projectList = () => {
+    const out = [];
+    for (const s of [...document.querySelectorAll('section.ui-sidebar-section, .ui-sidebar-section')].filter(vis)) {
+      const head = s.querySelector('[class*="section-head"]') || s.querySelector('.ui-sidebar-section-head');
+      const name = head ? firstLine(head) : '';
+      if (name && !out.includes(name)) out.push(name);
+    }
+    return out;
+  };
+  // Locate the "New Agent" button on a project's header (starts a new chat in that project).
+  const newChatTarget = project => {
+    for (const s of [...document.querySelectorAll('section.ui-sidebar-section, .ui-sidebar-section')].filter(vis)) {
+      const head = s.querySelector('[class*="section-head"]') || s.querySelector('.ui-sidebar-section-head');
+      if (!head || firstLine(head) !== project) continue;
+      const btn = head.querySelector('[aria-label="New Agent"]');
+      if (btn) { btn.scrollIntoView({ block: 'nearest' }); return center(btn); }
+      return null;
+    }
+    return null;
+  };
 
   return { extract, locate, panelRect, control, menuItems, menuItem, quickOpenRows, agentState, queueTarget, stopTarget, focusQueueEdit,
-    menuOpen, maxToggle, modelTarget, modelParams, paramTarget, subTarget, activeChatTab, tabTarget, hasComposer, filesState, fileTarget, questionTarget, historyPlane, scrollPlane, sessionTree, sessionTarget, expandMoreOnce };
+    menuOpen, maxToggle, modelTarget, modelParams, paramTarget, subTarget, activeChatTab, tabTarget, hasComposer, filesState, fileTarget, questionTarget, historyPlane, scrollPlane, sessionTree, sessionTarget, expandMoreOnce, projectList, newChatTarget };
 }
 
 const helpersCall = call => `(${pageHelpers.toString()})().${call}`;
@@ -676,6 +703,8 @@ class Session {
     this.mode = 'chat';
     this.lastChat = '';
     this.lastPanel = '';
+    this.historyCache = null;   // full transcript snapshot, keyed by winTitle
+    this.historyKey = '';
     this.idleTimer = setInterval(() => this.pollIfIdle(), 2000);
   }
 
@@ -688,8 +717,8 @@ class Session {
       this.lastChat = '';
       this.chatTimer = setInterval(() => this.pollChat().catch(() => {}), 700);
       await this.pollChat();
-      // Load the full transcript once the live panel is showing; deferred so it never blocks first render.
-      setTimeout(() => this.loadHistory().catch(() => {}), 300);
+      // Do NOT auto-walk the transcript here: scrolling the panel to collect history is visible on
+      // the desktop and annoyed users. History is loaded on demand via the "load earlier" button.
     } else {
       this.lastPanel = '';
       await this.sendPanelRect();
@@ -949,6 +978,11 @@ class Session {
   // and merging every rendered message, deduped by data-message-id, into one full chat snapshot.
   async loadHistory() {
     if (!this.cdp || this.historyLoading) return;
+    // Same conversation already loaded: serve the cached snapshot instead of scrolling the panel again.
+    if (this.historyCache && this.historyKey === this.winTitle) {
+      this.emit({ t: 'chat', chat: this.historyCache });
+      return;
+    }
     this.historyLoading = true;
     this.emit({ t: 'history', loading: true });
     try {
@@ -977,7 +1011,10 @@ class Session {
       await this.cdp.evaluate(helpersCall('scrollPlane(1e9)')).catch(() => {});
       if (lastMeta) {
         const items = [...collected.values()].reverse(); // oldest -> newest
-        this.emit({ t: 'chat', chat: { ...lastMeta, items } });
+        const full = { ...lastMeta, items };
+        this.historyCache = full;
+        this.historyKey = this.winTitle;
+        this.emit({ t: 'chat', chat: full });
       }
     } finally {
       this.historyLoading = false;
@@ -1002,8 +1039,26 @@ class Session {
     if (!pos) throw new Error('找不到该会话');
     await this.tapCss(pos.x, pos.y);
     await new Promise(r => setTimeout(r, 800));   // 等 Cursor 切换到新会话
+    this.historyCache = null;                      // 换了会话，清缓存让 loadHistory 重新加载
+    this.historyKey = '';
     this.emit({ t: 'status', ok: true, msg: '已切换到「' + name + '」' });
     await this.loadHistory();                      // 加载新会话的历史
+  }
+
+  async listProjects() {
+    const projects = await this.cdp.evaluate(helpersCall('projectList()')).catch(() => null);
+    this.emit({ t: 'projectList', projects: projects || [] });
+  }
+
+  async newChatIn(project) {
+    const pos = await this.cdp.evaluate(helpersCall(`newChatTarget(${JSON.stringify(String(project))})`));
+    if (!pos) throw new Error('找不到该项目的「新建」按钮');
+    await this.tapCss(pos.x, pos.y);
+    await new Promise(r => setTimeout(r, 800));   // 等 Cursor 新建对话
+    this.historyCache = null;                      // 新对话，清缓存
+    this.historyKey = '';
+    this.emit({ t: 'status', ok: true, msg: '已在「' + project + '」新建对话' });
+    await this.loadHistory();
   }
 
   emit(obj) {
@@ -1272,6 +1327,8 @@ class Session {
       case 'loadHistory': return this.loadHistory();
       case 'sessionTree': return this.listSessionTree();
       case 'openSession': return this.openSession(String(msg.project ?? ''), String(msg.name ?? ''));
+      case 'projectList': return this.listProjects();
+      case 'newChatIn': return this.newChatIn(String(msg.project ?? ''));
       case 'tap': return this.tap(msg.x, msg.y, msg.button);
       case 'wheel': return this.wheel(msg.x, msg.y, msg.dx || 0, msg.dy || 0);
       case 'key': return this.key(msg.key);
