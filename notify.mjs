@@ -122,7 +122,7 @@ export function startWatcher({ listWindows, openCdp, probe }) {
         watched.set(win.id, w);
       }
       try {
-        const s = await w.cdp.evaluate(probe);
+        const s = await w.cdp.evaluate(probe(win));
         if (s) check(win, w, s);
       } catch {}
     }));

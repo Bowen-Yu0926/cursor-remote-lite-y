@@ -18,6 +18,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3939);
 const HOST = process.env.HOST || '0.0.0.0';
 const CDP_URL = (process.env.CDP_URL || 'http://127.0.0.1:9222').replace(/\/$/, '');
+// Debug ports to probe: the configured Cursor port plus the common Cursor (9223) and opencode (9222) ports.
+// Each port's app type is detected from its /json/version User-Agent.
+const CDP_PORTS = [...new Set([Number(new URL(CDP_URL).port), 9222, 9223])].filter(Boolean);
 const TUNNEL = process.argv.includes('--tunnel');
 const CONFIG_FILE = path.join(DATA_DIR, 'config.json');
 const APP_DIR = path.join(__dirname, 'app');
@@ -87,18 +90,32 @@ function originAllowed(req) {
 }
 
 async function listWindows() {
-  const res = await fetch(`${CDP_URL}/json/list`).catch(() => {
-    throw new Error('连不上 Cursor：Cursor 没有用 start-cursor.sh / start-cursor.ps1 启动（调试端口未开启）');
-  });
-  const targets = await res.json();
-  return targets
-    .filter(t => t.type === 'page' && /workbench/.test(t.url))
-    .map(t => ({
-      id: t.id,
-      title: t.title,
-      ws: t.webSocketDebuggerUrl,
-      kind: t.title === 'Cursor Agents' ? 'agents' : /\[SSH: /.test(t.title) ? 'ssh' : 'local',
-    }));
+  const all = [];
+  for (const port of CDP_PORTS) {
+    const base = `http://127.0.0.1:${port}`;
+    let app = null;
+    try {
+      const ver = await (await fetch(`${base}/json/version`)).json();
+      const ua = ver['User-Agent'] || '';
+      if (/OpenCodeDev/.test(ua)) app = 'opencode';
+      else if (/Cursor/.test(ua)) app = 'cursor';
+    } catch { continue; }
+    if (!app) continue;
+    try {
+      const targets = await (await fetch(`${base}/json/list`)).json();
+      for (const t of targets.filter(x => x.type === 'page')) {
+        all.push({
+          id: t.id,
+          title: t.title,
+          ws: t.webSocketDebuggerUrl,
+          app,
+          kind: app === 'cursor' ? (t.title === 'Cursor Agents' ? 'agents' : /\[SSH: /.test(t.title) ? 'ssh' : 'local') : 'local',
+        });
+      }
+    } catch {}
+  }
+  if (!all.length) throw new Error('连不上 Cursor 或 opencode：请确认它们已用调试端口启动');
+  return all;
 }
 
 class Cdp {
@@ -176,6 +193,21 @@ const FOCUS_COMPOSER = `(() => {
   const selectors = ['.aislash-editor-input[contenteditable="true"]', '.ui-prompt-input-editor__input[contenteditable="true"]', '.composer-bar [contenteditable="true"]', '.auxiliarybar [contenteditable="true"]'];
   let eds = [];
   for (const s of selectors) { eds = [...document.querySelectorAll(s)].filter(visible); if (eds.length) break; }
+  if (!eds.length) return null;
+  const el = eds.find(e => e.contains(document.activeElement)) || eds[eds.length - 1];
+  el.focus();
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  return true;
+})()`;
+
+// opencode's chat input is a plain contenteditable (placeholder "提示词").
+const FOCUS_OPENCODE = `(() => {
+  const eds = [...document.querySelectorAll('[contenteditable="true"]')].filter(e => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; });
   if (!eds.length) return null;
   const el = eds.find(e => e.contains(document.activeElement)) || eds[eds.length - 1];
   el.focus();
@@ -686,7 +718,87 @@ function pageHelpers() {
     menuOpen, maxToggle, modelTarget, modelParams, paramTarget, subTarget, activeChatTab, tabTarget, hasComposer, filesState, fileTarget, questionTarget, historyPlane, scrollPlane, sessionTree, sessionTarget, expandMoreOnce, projectList, newChatTarget };
 }
 
-const helpersCall = call => `(${pageHelpers.toString()})().${call}`;
+// opencode 版 helpers（阶段 1 空壳，阶段 2 填充 opencode 的 DOM 适配）
+function opencodeHelpers() {
+  const vis = e => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0; };
+  const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+  // The transcript lives in .scroll-view__viewport; its child with the most text is the message list.
+  const msgRoot = () => {
+    const vp = document.querySelector('.scroll-view__viewport');
+    if (!vp) return null;
+    let best = vp, bestLen = 0;
+    for (const c of vp.children) {
+      const t = (c.innerText || '').length;
+      if (t > bestLen) { bestLen = t; best = c; }
+    }
+    return best;
+  };
+  const extract = () => {
+    const root = msgRoot();
+    if (!root) return null;
+    const items = [];
+    let n = 0;
+    for (const el of root.children) {
+      const text = (el.innerText || '').trim();
+      if (!text || text === '已探索') continue;
+      const metaEl = [...el.querySelectorAll('.text-12-regular')].find(m => /·\s*(cn:|gpt-|claude-|deepseek)/i.test(m.innerText || ''));
+      if (metaEl) {
+        // User message: strip the "agent · model · time" metadata from the end.
+        const metaText = (metaEl.innerText || '').trim();
+        const idx = text.indexOf(metaText);
+        items.push({ i: 'u' + (n++), k: 'human', t: (idx >= 0 ? text.slice(0, idx) : text.split('\n')[0]).trim() });
+      } else {
+        // Assistant message: plain text to avoid shipping the huge syntax-highlighted HTML.
+        items.push({ i: 'a' + (n++), k: 'assistant', h: '<pre>' + esc(text) + '</pre>' });
+      }
+    }
+    const r = document.documentElement.getBoundingClientRect();
+    return {
+      rect: [r.x, r.y, r.width, r.height].map(Math.round),
+      items, global: [], busy: false, queued: [], subagents: [], changed: 0,
+      questions: null, readonly: false, mode: null, model: null,
+    };
+  };
+  const agentState = () => {
+    const stop = [...document.querySelectorAll('[aria-label="停止"]')].find(vis);
+    return { busy: !!stop, waiting: false, waitingText: '' };
+  };
+  return {
+    extract,
+    agentState,
+    panelRect: () => { const r = document.documentElement.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; },
+    locate: () => null,
+    control: () => null,
+    menuItems: () => [],
+    menuItem: () => null,
+    quickOpenRows: () => [],
+    queueTarget: () => null,
+    stopTarget: () => null,
+    focusQueueEdit: () => {},
+    menuOpen: () => false,
+    maxToggle: () => null,
+    modelTarget: () => null,
+    modelParams: () => null,
+    paramTarget: () => null,
+    subTarget: () => null,
+    activeChatTab: () => null,
+    tabTarget: () => null,
+    hasComposer: () => true,
+    filesState: () => null,
+    fileTarget: () => null,
+    questionTarget: () => null,
+    historyPlane: () => null,
+    scrollPlane: () => null,
+    sessionTree: () => [],
+    sessionTarget: () => null,
+    expandMoreOnce: () => 0,
+    projectList: () => [],
+    newChatTarget: () => null,
+  };
+}
+
+const HELPERS = { cursor: pageHelpers, opencode: opencodeHelpers };
+const helpersCall = (app, call) => `(${(HELPERS[app] || pageHelpers).toString()})().${call}`;
 
 class Session {
   constructor(client, deviceId) {
@@ -701,12 +813,15 @@ class Session {
     this.lastFrameAt = 0;
     this.lastHash = '';
     this.mode = 'chat';
+    this.app = 'cursor';           // which app this session controls: 'cursor' | 'opencode'
     this.lastChat = '';
     this.lastPanel = '';
     this.historyCache = null;   // full transcript snapshot, keyed by winTitle
     this.historyKey = '';
     this.idleTimer = setInterval(() => this.pollIfIdle(), 2000);
   }
+
+  hcall(call) { return this.hcall(this.app, call); }
 
   async setMode(mode) {
     this.mode = mode === 'screen' ? 'screen' : 'chat';
@@ -731,7 +846,7 @@ class Session {
     if (!this.cdp || this.polling || this.historyLoading) return;
     this.polling = true;
     try {
-      const chat = await this.cdp.evaluate(helpersCall('extract()'));
+      const chat = await this.cdp.evaluate(this.hcall('extract()'));
       const json = JSON.stringify(chat);
       if (json !== this.lastChat) {
         this.lastChat = json;
@@ -743,7 +858,7 @@ class Session {
   }
 
   async sendPanelRect() {
-    const rect = await this.cdp.evaluate(helpersCall('panelRect()')).catch(() => null);
+    const rect = await this.cdp.evaluate(this.hcall('panelRect()')).catch(() => null);
     const json = JSON.stringify(rect);
     if (json !== this.lastPanel) {
       this.lastPanel = json;
@@ -752,7 +867,7 @@ class Session {
   }
 
   async clickButton(item, n) {
-    const pos = await this.cdp.evaluate(helpersCall(`locate(${JSON.stringify(String(item))}, ${Number(n) || 0})`));
+    const pos = await this.cdp.evaluate(this.hcall(`locate(${JSON.stringify(String(item))}, ${Number(n) || 0})`));
     if (!pos) throw new Error('按钮已经不在了，可能状态已变化');
     await this.tapCss(pos.x, pos.y);
     setTimeout(() => this.pollChat().catch(() => {}), 300);
@@ -761,7 +876,7 @@ class Session {
   async editQueued(id, text) {
     if (!text.trim()) throw new Error('内容不能为空；不想要这条就点「删除」');
     await this.queueAction(id, 'edit');
-    const focus = () => this.cdp.evaluate(helpersCall(`focusQueueEdit(${JSON.stringify(String(id))})`));
+    const focus = () => this.cdp.evaluate(this.hcall(`focusQueueEdit(${JSON.stringify(String(id))})`));
     let ok = false;
     for (let i = 0; i < 10 && !ok; i++) {
       await new Promise(r => setTimeout(r, 100));
@@ -776,7 +891,7 @@ class Session {
 
   async queueAction(id, action) {
     if (!['send', 'remove', 'edit'].includes(action)) throw new Error('不支持的排队操作');
-    const call = a => this.cdp.evaluate(helpersCall(`queueTarget(${JSON.stringify(String(id))}${a ? `, ${JSON.stringify(a)}` : ''})`));
+    const call = a => this.cdp.evaluate(this.hcall(`queueTarget(${JSON.stringify(String(id))}${a ? `, ${JSON.stringify(a)}` : ''})`));
     const row = await call();
     if (!row) throw new Error('这条排队消息已经不在了（可能刚被发出）');
     await this.cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: row.x, y: row.y });
@@ -792,18 +907,18 @@ class Session {
 
   async subagentAction(name, part) {
     const call = `subTarget(${JSON.stringify(String(name))}, ${JSON.stringify(part)})`;
-    let pos = await this.cdp.evaluate(helpersCall(call));
+    let pos = await this.cdp.evaluate(this.hcall(call));
     if (pos?.expand) {
       await this.tapCss(pos.x, pos.y);
       for (let i = 0; i < 8 && (!pos || pos.expand); i++) {
         await new Promise(r => setTimeout(r, 120));
-        pos = await this.cdp.evaluate(helpersCall(call));
+        pos = await this.cdp.evaluate(this.hcall(call));
       }
     }
     if (!pos || pos.expand) throw new Error('这个子 Agent 已经结束了，或者 Cursor 里找不到它');
     if (part === 'open') {
-      const tab = await this.cdp.evaluate(helpersCall('activeChatTab()'));
-      if (tab && await this.cdp.evaluate(helpersCall('hasComposer()'))) this.mainTab = tab;
+      const tab = await this.cdp.evaluate(this.hcall('activeChatTab()'));
+      if (tab && await this.cdp.evaluate(this.hcall('hasComposer()'))) this.mainTab = tab;
     }
     await this.tapCss(pos.x, pos.y);
     setTimeout(() => this.pollChat().catch(() => {}), 500);
@@ -811,11 +926,11 @@ class Session {
 
   // Opens Cursor's changed-files list if needed, runs fn, then puts the list back the way it was.
   async withFiles(fn) {
-    const state = () => this.cdp.evaluate(helpersCall('filesState()'));
+    const state = () => this.cdp.evaluate(this.hcall('filesState()'));
     let s = await state();
     const opened = !s.files.length;
     if (opened) {
-      const t = await this.cdp.evaluate(helpersCall('fileTarget(0, "", "toggle")'));
+      const t = await this.cdp.evaluate(this.hcall('fileTarget(0, "", "toggle")'));
       if (!t) return fn(s);
       await this.tapCss(t.x, t.y);
       for (let i = 0; i < 8 && !s.files.length; i++) {
@@ -826,7 +941,7 @@ class Session {
     try {
       return await fn(s);
     } finally {
-      const t = opened && await this.cdp.evaluate(helpersCall('fileTarget(0, "", "toggle")'));
+      const t = opened && await this.cdp.evaluate(this.hcall('fileTarget(0, "", "toggle")'));
       if (t && (await state()).files.length) await this.tapCss(t.x, t.y);
     }
   }
@@ -839,7 +954,7 @@ class Session {
   async changeAction(i, name, act) {
     if (!['keep', 'undo', 'bar'].includes(act)) throw new Error('不支持的操作');
     await this.withFiles(async () => {
-      const call = a => helpersCall(`fileTarget(${Number(i) || 0}, ${JSON.stringify(String(name))}, ${JSON.stringify(a)})`);
+      const call = a => this.hcall(`fileTarget(${Number(i) || 0}, ${JSON.stringify(String(name))}, ${JSON.stringify(a)})`);
       if (act !== 'bar') {
         const row = await this.cdp.evaluate(call('row'));
         if (!row) throw new Error('文件列表已经变了，请重新打开');
@@ -856,21 +971,21 @@ class Session {
   }
 
   async backToMain() {
-    const pos = this.mainTab && await this.cdp.evaluate(helpersCall(`tabTarget(${JSON.stringify(this.mainTab)})`));
+    const pos = this.mainTab && await this.cdp.evaluate(this.hcall(`tabTarget(${JSON.stringify(this.mainTab)})`));
     if (!pos) throw new Error('找不到原来的主对话标签页，请在「画面」里手动切回');
     await this.tapCss(pos.x, pos.y);
     setTimeout(() => this.pollChat().catch(() => {}), 400);
   }
 
   async stopAgent() {
-    const pos = await this.cdp.evaluate(helpersCall('stopTarget()'));
+    const pos = await this.cdp.evaluate(this.hcall('stopTarget()'));
     if (!pos) throw new Error('Agent 当前没有在运行');
     await this.tapCss(pos.x, pos.y);
     setTimeout(() => this.pollChat().catch(() => {}), 300);
   }
 
   async pressControl(name) {
-    const pos = await this.cdp.evaluate(helpersCall(`control(${JSON.stringify(name)})`));
+    const pos = await this.cdp.evaluate(this.hcall(`control(${JSON.stringify(name)})`));
     if (!pos) throw new Error('当前窗口里没有这个按钮（可能是 Cursor 版本或布局不同）');
     await this.tapCss(pos.x, pos.y);
   }
@@ -881,15 +996,15 @@ class Session {
     let items = [];
     for (let i = 0; i < 10 && !items.length; i++) {
       await new Promise(r => setTimeout(r, 150));
-      items = await this.cdp.evaluate(helpersCall(`menuItems(${JSON.stringify(kind)})`));
+      items = await this.cdp.evaluate(this.hcall(`menuItems(${JSON.stringify(kind)})`));
     }
-    const max = kind === 'model' ? await this.cdp.evaluate(helpersCall('maxToggle()?.on ?? null')) : null;
+    const max = kind === 'model' ? await this.cdp.evaluate(this.hcall('maxToggle()?.on ?? null')) : null;
     await this.closeMenus();
     this.emit({ t: 'menu', kind, items, max });
   }
 
   async closeMenus() {
-    for (let i = 0; i < 3 && await this.cdp.evaluate(helpersCall('menuOpen()')); i++) {
+    for (let i = 0; i < 3 && await this.cdp.evaluate(this.hcall('menuOpen()')); i++) {
       await this.key('Escape');
       await new Promise(r => setTimeout(r, 120));
     }
@@ -898,7 +1013,7 @@ class Session {
   async waitFor(call, tries = 10) {
     for (let i = 0; i < tries; i++) {
       await new Promise(r => setTimeout(r, 120));
-      const v = await this.cdp.evaluate(helpersCall(call));
+      const v = await this.cdp.evaluate(this.hcall(call));
       if (v) return v;
     }
     return null;
@@ -940,7 +1055,7 @@ class Session {
   async pickParam(model, label, section, value) {
     try {
       await this.openParamMenu(model);
-      const pos = await this.cdp.evaluate(helpersCall(`paramTarget(${JSON.stringify(String(section))}, ${JSON.stringify(String(value))})`));
+      const pos = await this.cdp.evaluate(this.hcall(`paramTarget(${JSON.stringify(String(section))}, ${JSON.stringify(String(value))})`));
       if (!pos) throw new Error(`没找到参数：${section} / ${value}`);
       await this.tapCss(pos.x, pos.y);
       await new Promise(r => setTimeout(r, 250));
@@ -956,7 +1071,7 @@ class Session {
     let pos = null;
     for (let i = 0; i < 10 && !pos; i++) {
       await new Promise(r => setTimeout(r, 150));
-      pos = await this.cdp.evaluate(helpersCall(`menuItem(${JSON.stringify(kind)}, ${JSON.stringify(String(label))})`));
+      pos = await this.cdp.evaluate(this.hcall(`menuItem(${JSON.stringify(kind)}, ${JSON.stringify(String(label))})`));
     }
     if (!pos) {
       await this.key('Escape');
@@ -967,7 +1082,7 @@ class Session {
   }
 
   async scrollChat(dy) {
-    const rect = await this.cdp.evaluate(helpersCall('panelRect()'));
+    const rect = await this.cdp.evaluate(this.hcall('panelRect()'));
     if (!rect) return;
     const [x, y, w, h] = rect;
     await this.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: x + w / 2, y: y + h / 2, deltaX: 0, deltaY: dy });
@@ -987,13 +1102,13 @@ class Session {
     this.emit({ t: 'history', loading: true });
     try {
       // Jump to the very bottom first so the walk starts at the latest message.
-      await this.cdp.evaluate(helpersCall('scrollPlane(1e9)')).catch(() => {});
+      await this.cdp.evaluate(this.hcall('scrollPlane(1e9)')).catch(() => {});
       await new Promise(r => setTimeout(r, 150));
       const collected = new Map();
       let lastMeta = null;
       let lastCount = -1, stall = 0;
       for (let i = 0; i < 500; i++) {
-        const chat = await this.cdp.evaluate(helpersCall('extract()')).catch(() => null);
+        const chat = await this.cdp.evaluate(this.hcall('extract()')).catch(() => null);
         if (chat) {
           lastMeta = chat;
           for (const item of chat.items || []) {
@@ -1001,14 +1116,14 @@ class Session {
             if (key && !collected.has(key)) collected.set(key, item);
           }
         }
-        const scroll = await this.cdp.evaluate(helpersCall('scrollPlane(-600)')).catch(() => null);
+        const scroll = await this.cdp.evaluate(this.hcall('scrollPlane(-600)')).catch(() => null);
         if (!scroll || scroll.top <= 0) break;
         if (collected.size === lastCount) { if (++stall > 6) break; }
         else { stall = 0; lastCount = collected.size; }
         await new Promise(r => setTimeout(r, 220));
       }
       // Restore the bottom so the live view keeps showing the newest message.
-      await this.cdp.evaluate(helpersCall('scrollPlane(1e9)')).catch(() => {});
+      await this.cdp.evaluate(this.hcall('scrollPlane(1e9)')).catch(() => {});
       if (lastMeta) {
         const items = [...collected.values()].reverse(); // oldest -> newest
         const full = { ...lastMeta, items };
@@ -1026,16 +1141,16 @@ class Session {
     // Each project shows its first few sessions plus a "More" row; expand all of them so the
     // tree is complete, then read it. Expanding is harmless (it just reveals more rows).
     for (let i = 0; i < 20; i++) {
-      const clicked = await this.cdp.evaluate(helpersCall('expandMoreOnce()')).catch(() => 0);
+      const clicked = await this.cdp.evaluate(this.hcall('expandMoreOnce()')).catch(() => 0);
       if (!clicked) break;
       await new Promise(r => setTimeout(r, 250));   // let React re-render the expanded rows
     }
-    const tree = await this.cdp.evaluate(helpersCall('sessionTree()')).catch(() => null);
+    const tree = await this.cdp.evaluate(this.hcall('sessionTree()')).catch(() => null);
     this.emit({ t: 'sessionTree', tree: tree || [] });
   }
 
   async openSession(project, name) {
-    const pos = await this.cdp.evaluate(helpersCall(`sessionTarget(${JSON.stringify(String(project))}, ${JSON.stringify(String(name))})`));
+    const pos = await this.cdp.evaluate(this.hcall(`sessionTarget(${JSON.stringify(String(project))}, ${JSON.stringify(String(name))})`));
     if (!pos) throw new Error('找不到该会话');
     await this.tapCss(pos.x, pos.y);
     await new Promise(r => setTimeout(r, 800));   // 等 Cursor 切换到新会话
@@ -1046,12 +1161,12 @@ class Session {
   }
 
   async listProjects() {
-    const projects = await this.cdp.evaluate(helpersCall('projectList()')).catch(() => null);
+    const projects = await this.cdp.evaluate(this.hcall('projectList()')).catch(() => null);
     this.emit({ t: 'projectList', projects: projects || [] });
   }
 
   async newChatIn(project) {
-    const pos = await this.cdp.evaluate(helpersCall(`newChatTarget(${JSON.stringify(String(project))})`));
+    const pos = await this.cdp.evaluate(this.hcall(`newChatTarget(${JSON.stringify(String(project))})`));
     if (!pos) throw new Error('找不到该项目的「新建」按钮');
     await this.tapCss(pos.x, pos.y);
     await new Promise(r => setTimeout(r, 800));   // 等 Cursor 新建对话
@@ -1072,14 +1187,14 @@ class Session {
       let rows = null;
       for (let i = 0; i < 6 && !rows; i++) {
         await new Promise(r => setTimeout(r, 150));
-        rows = await this.cdp.evaluate(helpersCall('quickOpenRows()'));
+        rows = await this.cdp.evaluate(this.hcall('quickOpenRows()'));
       }
       if (!rows) return [];
       await this.cdp.send('Input.insertText', { text: name });
       let hits = [];
       for (let i = 0; i < 12; i++) {
         await new Promise(r => setTimeout(r, 250));
-        hits = (await this.cdp.evaluate(helpersCall('quickOpenRows()')) || []).filter(r => r.name === name);
+        hits = (await this.cdp.evaluate(this.hcall('quickOpenRows()')) || []).filter(r => r.name === name);
         if (hits.length) break;
       }
       return hits;
@@ -1152,6 +1267,7 @@ class Session {
     this.cdp = cdp;
     this.targetId = win.id;
     this.winTitle = win.title;
+    this.app = win.app || 'cursor';   // route DOM helpers to the right app
     cdp.onclose = () => {
       if (this.cdp === cdp) {
         this.cdp = null;
@@ -1268,9 +1384,9 @@ class Session {
   }
 
   async sendMessage(text, submit) {
-    const found = await this.cdp.evaluate(FOCUS_COMPOSER);
+    const found = await this.cdp.evaluate(this.app === 'opencode' ? FOCUS_OPENCODE : FOCUS_COMPOSER);
     if (!found) throw new Error('没找到可见的聊天输入框：先在画面里打开 Agent 面板（或点「打开聊天」）');
-    const busy = submit && await this.cdp.evaluate(helpersCall('agentState()?.busy'));
+    const busy = submit && await this.cdp.evaluate(this.hcall('agentState()?.busy'));
     await this.typeText(text);
     if (submit) await this.key('Enter');
     if (this.mode === 'chat') setTimeout(() => this.pollChat().catch(() => {}), 300);
@@ -1278,7 +1394,7 @@ class Session {
   }
 
   async answerQuestion(qi, oi, part, text) {
-    const call = p => helpersCall(`questionTarget(${Number(qi) || 0}, ${Number(oi) || 0}, ${JSON.stringify(p)})`);
+    const call = p => this.hcall(`questionTarget(${Number(qi) || 0}, ${Number(oi) || 0}, ${JSON.stringify(p)})`);
     const pos = await this.cdp.evaluate(call(part));
     if (!pos) throw new Error('这个问题已经不在了（可能已在电脑上回答）');
     await this.tapCss(pos.x, pos.y);
@@ -1660,7 +1776,7 @@ server.listen(PORT, TUNNEL ? '127.0.0.1' : HOST, async () => {
   startWatcher({
     listWindows,
     openCdp: async ws => { const c = new Cdp(ws); await c.connect(); return c; },
-    probe: helpersCall('agentState()'),
+    probe: win => helpersCall(win.app, 'agentState()'),
   });
   try {
     const wins = await listWindows();

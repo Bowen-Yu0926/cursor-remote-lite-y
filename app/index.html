@@ -313,6 +313,7 @@ let mode = store.get('mode') || 'chat';
 let crop = store.get('crop') !== 'full';
 let frame = { w: 1000, h: 800 }, panel = null, zoom = 1, tapMode = 'tap', rightNext = false;
 let windows = [], currentWindow = null;
+let attachedOnce = false;
 
 // Keep the layout above the on-screen keyboard.
 function fitViewport() {
@@ -569,8 +570,12 @@ function connect() {
       send({ t: 'mode', mode });
       send({ t: 'windows' });
       const fromNotice = window.CursorRemoteApp?.takeOpenWin?.();
-      if (fromNotice) store.set('window', fromNotice);
-      send({ t: 'attach', id: store.get('window') || '' });
+      if (fromNotice) {
+        store.set('window', fromNotice);
+        attachedOnce = true;
+        send({ t: 'attach', id: fromNotice });
+      }
+      // 无通知时，等 windows 返回后弹「选择应用」再 attach
       sentWidth = 0;
       applyQuality();
       send({ t: 'visible', v: document.visibilityState === 'visible' });
@@ -581,7 +586,11 @@ function connect() {
     else if (m.t === 'chat') renderChat(m.chat);
     else if (m.t === 'frame') onFrame(m);
     else if (m.t === 'panel') { panel = m.rect; layoutStage(); applyQuality(); }
-    else if (m.t === 'windows') { windows = m.list; currentWindow = m.current; if (sheetKind === 'windows') showWindows(); }
+    else if (m.t === 'windows') {
+      windows = m.list; currentWindow = m.current;
+      if (sheetKind === 'windows') showWindows();
+      else if (!attachedOnce) { attachedOnce = true; pickAppAndAttach(); }
+    }
     else if (m.t === 'attached') {
       store.set('window', m.id);
       currentWindow = m.id;
@@ -635,6 +644,24 @@ function ask(question, ok = '确定') {
 const RISKY = /^(stop|reject|deny|undo|discard|revert|cancel|delete|remove|停止|拒绝|撤销|丢弃|取消|删除)/i;
 
 const KIND_TAG = { agents: 'Agents', ssh: 'SSH', local: '本地' };
+const APP_NAME = { cursor: 'Cursor', opencode: 'opencode' };
+
+// On open: if both Cursor and opencode windows exist, ask which app to control; otherwise attach directly.
+function pickAppAndAttach() {
+  if (!windows.length) return;
+  const apps = [...new Set(windows.map(w => w.app || 'cursor'))];
+  if (apps.length <= 1) {
+    const saved = store.get('window');
+    const win = windows.find(w => w.id === saved) || windows[0];
+    if (win) send({ t: 'attach', id: win.id });
+    return;
+  }
+  openSheet('pickApp', `<h3>选择要控制的应用</h3>`
+    + apps.map(a => {
+      const n = windows.filter(w => (w.app || 'cursor') === a).length;
+      return `<button class="opt" data-app="${esc(a)}"><span class="lbl">${esc(APP_NAME[a] || a)}</span><span class="tag">${n} 个窗口</span></button>`;
+    }).join(''));
+}
 
 // Cursor titles look like "file.py — Folder [SSH: host]"; the window is identified by folder (+ host), not the open file.
 function winLabel(title) {
@@ -646,8 +673,8 @@ function winLabel(title) {
 
 function showWindows() {
   const rows = windows.map(w => `<button class="opt ${w.id === currentWindow ? 'cur' : ''}" data-win="${esc(w.id)}">
-    <span class="tag">${KIND_TAG[w.kind] || ''}</span><span class="lbl">${esc(winLabel(w.title || w.id).name)}${winLabel(w.title || '').file ? `<span class="sub">${esc(winLabel(w.title).file)}</span>` : ''}</span></button>`).join('');
-  openSheet('windows', `<h3>切换 Cursor 窗口</h3>${rows || '<div class="hint">没有找到窗口</div>'}`);
+    <span class="tag">${APP_NAME[w.app] || ''}</span><span class="tag">${KIND_TAG[w.kind] || ''}</span><span class="lbl">${esc(winLabel(w.title || w.id).name)}${winLabel(w.title || '').file ? `<span class="sub">${esc(winLabel(w.title).file)}</span>` : ''}</span></button>`).join('');
+  openSheet('windows', `<h3>切换窗口</h3>${rows || '<div class="hint">没有找到窗口</div>'}`);
 }
 $('title').onclick = () => { send({ t: 'windows' }); showWindows(); };
 
@@ -894,6 +921,12 @@ $('sheet').addEventListener('click', async e => {
   const b = e.target.closest('button');
   if (!b) return;
   if (b.dataset.win) { closeSheet(); return send({ t: 'attach', id: b.dataset.win }); }
+  if (b.dataset.app) {
+    closeSheet();
+    const win = windows.find(w => (w.app || 'cursor') === b.dataset.app);
+    if (win) send({ t: 'attach', id: win.id });
+    return;
+  }
   if (b.dataset.kind) { closeSheet(); status('切换中…'); return send({ t: 'pickMenu', kind: b.dataset.kind, label: b.dataset.label }); }
   if (b.dataset.chopen) { closeSheet(); return openFile(b.dataset.chopen); }
   if (b.dataset.ch) {
