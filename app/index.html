@@ -57,7 +57,7 @@
   .assistant blockquote { margin: 0 0 .6em; padding-left: 10px; border-left: 3px solid #555; color: #aaa; }
   .tool { font: 12.5px/1.4 ui-monospace, Menlo, monospace; color: #9da5b4; background: #252526; border: 1px solid #303030; border-radius: 8px; padding: 6px 9px; }
   .tool .txt { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .thinking, .other { font-size: 12px; color: #777; padding-left: 2px; }
+  .msg.thinking, .other { font-size: 12px; color: #888; padding-left: 2px; }
   .btns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .btns button { font-size: 13px; padding: 5px 10px; }
   .btns button.primary { font-weight: 600; }
@@ -128,6 +128,15 @@
   #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 31; background: #252526; border-radius: 14px 14px 0 0; padding: 12px 12px calc(14px + env(safe-area-inset-bottom)); max-height: 75dvh; overflow-y: auto; transform: translateY(105%); transition: transform .2s; }
   #sheet.open { transform: none; }
   #sheet h3 { margin: 2px 4px 10px; font-size: 15px; color: #ccc; font-weight: 600; }
+  .treeGroup { margin-bottom: 8px; }
+  .treeProj { font-size: 12px; color: #8ab4f8; margin: 8px 4px 4px; font-weight: 600; }
+  .treeSess { padding-left: 22px !important; }
+  .secTitle { font-size: 12px; color: #888; margin: 10px 4px 6px; font-weight: 600; }
+  .histCards { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .histCard { position: relative; max-width: 100%; }
+  .histBody { display: block; width: 100%; text-align: left; padding: 9px 12px; padding-right: 30px; border-radius: 10px; background: #333; border: 1px solid #444; color: #ddd; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; max-width: 100%; }
+  .histDel { position: absolute; top: 6px; right: 6px; width: 22px; height: 22px; line-height: 20px; padding: 0; border-radius: 50%; background: #3a3d41; color: #999; font-size: 13px; }
+  .histDel:hover { background: #a1260d; color: #fff; }
   .opt { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 11px 12px; margin-bottom: 6px; white-space: normal; }
   .opt .lbl { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .opt .sub { display: block; font-size: 12px; color: #888; margin-top: 2px; }
@@ -289,6 +298,17 @@ const store = {
 };
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// 发送过的消息历史（本地存储，卡片复用）
+const sendHistory = () => { try { return JSON.parse(store.get('sendHistory') || '[]'); } catch { return []; } };
+const saveSendHistory = t => {
+  t = (t || '').trim();
+  if (!t) return;
+  const h = sendHistory().filter(x => x !== t);   // 去重
+  h.unshift(t);                                    // 最新在前
+  store.set('sendHistory', JSON.stringify(h.slice(0, 50)));
+};
+const delSendHistory = i => { const h = sendHistory(); h.splice(i, 1); store.set('sendHistory', JSON.stringify(h)); };
 
 let base = null, info = null, ws = null, authed = false, failures = 0;
 let mode = store.get('mode') || 'chat';
@@ -567,10 +587,17 @@ function connect() {
     else if (m.t === 'attached') {
       store.set('window', m.id);
       currentWindow = m.id;
+      cache.clear();
+      lastChat = null;
+      itemsEl.replaceChildren();
       $('titleText').textContent = winLabel(m.title).name;
       send({ t: 'windows' });
     }
+    else if (m.t === 'history') {
+      $('older').textContent = m.loading ? '加载中…' : '↑ 加载更早的消息';
+    }
     else if (m.t === 'menu') showMenu(m.kind, m.items, m.max);
+    else if (m.t === 'sessionTree') showSessionTree(m.tree);
     else if (m.t === 'params') showParams(m);
     else if (m.t === 'changes') showChanges(m);
     else if (m.t === 'file') showFile(m);
@@ -635,6 +662,32 @@ function showMenu(kind, items, max) {
     const pick = `<button class="opt ${it.checked ? 'cur' : ''}" data-kind="${kind}" data-label="${esc(it.label)}"><span class="lbl">${esc(it.label)}</span></button>`;
     return it.params ? `<div class="optRow">${pick}<button class="paramBtn" data-params="${esc(it.id)}" data-plabel="${esc(it.label)}">参数</button></div>` : pick;
   }).join(''));
+}
+
+// 填过的记录卡片（本地历史）
+function sendHistoryCards() {
+  const h = sendHistory();
+  if (!h.length) return '';
+  return `<div class="secTitle">填过的记录</div><div class="histCards">`
+    + h.map((t, i) => `<div class="histCard"><button class="histBody" data-histidx="${i}">${esc(t)}</button><button class="histDel" data-histdel="${i}" title="删除">×</button></div>`).join('')
+    + `</div>`;
+}
+
+// 统一的「历史」弹窗：填过的记录卡片 + 历史会话树
+function openHistorySheet(tree) {
+  const cards = sendHistoryCards();
+  const treeHtml = tree && tree.length
+    ? `<div class="secTitle">历史会话</div>` + tree.map(g => `<div class="treeGroup"><div class="treeProj">${esc(g.project)}</div>`
+      + (g.sessions || []).map(s => `<button class="opt treeSess" data-proj="${esc(g.project)}" data-sess="${esc(s)}"><span class="lbl">${esc(s)}</span></button>`).join('')
+      + '</div>').join('')
+    : '';
+  const tail = treeHtml || (tree ? '<div class="hint">没有找到会话</div>' : '<div class="hint">读取会话中…</div>');
+  openSheet('history', `<h3>历史</h3>${cards}${tail}`);
+}
+
+function showSessionTree(tree) {
+  status('');
+  openHistorySheet(tree);
 }
 
 function showChanges(m) {
@@ -851,6 +904,23 @@ $('sheet').addEventListener('click', async e => {
   if ('max' in b.dataset) { status('切换 MAX Mode…'); return send({ t: 'toggleMax' }); }
   if (b.dataset.params) { status('读取模型参数…'); return send({ t: 'params', model: b.dataset.params, label: b.dataset.plabel }); }
   if (b.dataset.section) { status('设置中…'); return send({ t: 'pickParam', model: b.dataset.model, label: b.dataset.plabel, section: b.dataset.section, value: b.dataset.value }); }
+  if (b.dataset.sess) {
+    closeSheet();
+    cache.clear(); itemsEl.replaceChildren(); lastChat = null;   // 清空当前会话，避免串消息
+    status('正在打开「' + b.dataset.sess + '」…');
+    return send({ t: 'openSession', project: b.dataset.proj, name: b.dataset.sess });
+  }
+  if (b.dataset.histidx != null) {   // 点卡片：填入输入框
+    const t = sendHistory()[Number(b.dataset.histidx)];
+    if (t != null) { closeSheet(); text.value = t; autosize(); status('已填入输入框'); }
+    return;
+  }
+  if (b.dataset.histdel != null) {   // 删除卡片
+    delSendHistory(Number(b.dataset.histdel));
+    openHistorySheet(null);
+    send({ t: 'sessionTree' });
+    return;
+  }
   const act = b.dataset.act;
   if (act === 'install') showInstallHelp();
   else if (act === 'browserInstall') { closeSheet(); installEvent?.prompt(); installEvent = null; }
@@ -928,6 +998,7 @@ function renderItem(it) {
     el.innerHTML = `<div class="txt">${esc(it.t || '')}</div>`;
     if (it.f) el.dataset.file = it.f;
   }
+  else if (it.k === 'thinking') el.textContent = (it.t ? '💭 思考 ' + it.t : '💭 思考');
   else el.textContent = it.t || '';
   if (it.b && it.k !== 'human') el.insertAdjacentHTML('beforeend', `<div class="btns">${buttonsHtml(it.b, it.i)}</div>`);
   return el;
@@ -944,7 +1015,7 @@ function renderChat(chat) {
   $('pickModel').hidden = !chat?.model;
   if (chat?.mode) $('pickMode').textContent = chat.mode + ' ▾';
   if (chat?.model) $('pickModel').textContent = chat.model + ' ▾';
-  if (!chat) { itemsEl.replaceChildren(); renderQueue(false, []); renderQuestions(null); return; }
+  if (!chat) { itemsEl.replaceChildren(); cache.clear(); renderQueue(false, []); renderQuestions(null); return; }
   const stick = nearBottom();
   // Anchor on the first visible item so loading older messages doesn't jump.
   let anchor = null, anchorTop = 0;
@@ -959,12 +1030,14 @@ function renderChat(chat) {
     if (hit && hit.key === key) return hit.el;
     const el = renderItem(it);
     el.dataset.i = it.i;
+    // Content changed for an existing item id: drop the stale node so we don't duplicate it.
+    if (hit) hit.el.remove();
     cache.set(it.i, { key, el });
     return el;
   });
-  itemsEl.replaceChildren(...els);
-  const live = new Set(chat.items.map(it => it.i));
-  for (const k of cache.keys()) if (!live.has(k)) cache.delete(k);
+  // Accumulate in order instead of replacing the whole list, so loading history
+  // keeps older messages. Cache is only cleared on window/session switch (see 'attached').
+  itemsEl.append(...els);
 
   $('actionBar').innerHTML = buttonsHtml(chat.global, 'g');
   $('actionBar').classList.toggle('show', chat.global.length > 0);
@@ -1083,7 +1156,7 @@ function updateToBottom() {
 }
 list.addEventListener('scroll', updateToBottom);
 $('toBottom').onclick = () => { list.scrollTop = list.scrollHeight; };
-$('older').onclick = () => send({ t: 'scrollChat', dy: -900 });
+$('older').onclick = () => send({ t: 'loadHistory' });
 
 document.addEventListener('click', async e => {
   const b = e.target.closest('button[data-item]');
@@ -1097,7 +1170,7 @@ document.addEventListener('click', async e => {
 
 $('pickMode').onclick = () => { status('读取模式列表…'); send({ t: 'openMenu', kind: 'mode' }); };
 $('pickModel').onclick = () => { status('读取模型列表…'); send({ t: 'openMenu', kind: 'model' }); };
-$('pickHistory').onclick = () => { status('读取历史对话…'); send({ t: 'openMenu', kind: 'history' }); };
+$('pickHistory').onclick = () => { status(''); openHistorySheet(null); send({ t: 'sessionTree' }); };
 $('newChat').onclick = () => { send({ t: 'newChat' }); status('已新建对话'); };
 
 /* ---------- file viewer ---------- */
@@ -1275,6 +1348,7 @@ text.addEventListener('input', autosize);
 $('send').onclick = () => {
   const v = text.value;
   if (!v.trim()) return;
+  saveSendHistory(v);   // 保存到本地「历史」
   send({ t: 'send', text: v, submit: true });
   text.value = ''; autosize();
   if (mode === 'chat') list.scrollTop = list.scrollHeight;

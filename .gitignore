@@ -1,6 +1,7 @@
 node_modules/
 .DS_Store
 *.log
+.cdp-port.env
 android/.gradle/
 android/build/
 android/app/build/

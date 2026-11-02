@@ -221,9 +221,28 @@ function pageHelpers() {
 
   // Newer Cursor builds virtualize the transcript and drop data-flat-index; messages use data-message-kind / data-message-id.
   const MSG = '[data-flat-index], [data-message-kind]';
-  const msgId = el => el.dataset.flatIndex || el.dataset.messageId || el.dataset.messageIndex || '';
+  const msgId = el => el.dataset.messageId || el.dataset.messageIndex || el.dataset.flatIndex || '';
   const closestMsg = el => el?.closest?.(MSG) || null;
+  // Newer Cursor (3.24.x) renders multiple nested containers and several virtualized planes. The message
+  // list we care about is the plane with the largest scrollHeight (the full transcript), not the one that
+  // merely wraps the currently-visible/folded messages.
+  const PLANE = '.composer-react-virtual-plane';
+  const historyPlane = () => {
+    const planes = [...document.querySelectorAll(PLANE)].filter(vis);
+    if (planes.length) return planes.reduce((a, b) => (b.scrollHeight > a.scrollHeight ? b : a));
+    return null;
+  };
+  // Scroll the main history plane; returns its new scrollTop and total scrollHeight so the caller knows progress.
+  const scrollPlane = delta => {
+    const p = historyPlane();
+    if (!p) return null;
+    const before = p.scrollTop;
+    p.scrollTop = Math.max(0, before + (Number(delta) || 0));
+    return { top: p.scrollTop, height: p.scrollHeight, clientHeight: p.clientHeight };
+  };
   const findPanel = () => {
+    const plane = historyPlane();
+    if (plane) return plane;
     for (const ed of [...document.querySelectorAll('.aislash-editor-input, .ui-prompt-input-editor__input')].filter(vis)) {
       const bar = ed.closest('.composer-bar');
       if (bar) return bar;
@@ -269,6 +288,7 @@ function pageHelpers() {
   };
 
   const topItems = panel => {
+    if (!panel) return [];
     const legacy = [...panel.querySelectorAll('[data-flat-index]')].filter(e => !e.parentElement.closest('[data-flat-index]'));
     if (legacy.length) return legacy;
     return [...panel.querySelectorAll('[data-message-kind]')].filter(e => !e.parentElement.closest('[data-message-kind]'));
@@ -416,19 +436,34 @@ function pageHelpers() {
     const r = panel.getBoundingClientRect();
     const items = topItems(panel).map(el => {
       const kindEl = el.matches('[data-message-kind]') ? el : el.querySelector('[data-message-kind]');
-      const k = kindEl?.dataset.messageKind || (el.querySelector('.composer-human-message, .aislash-editor-input-readonly') ? 'human' : 'other');
+      const k = kindEl?.dataset.messageKind || (el.querySelector('.composer-human-message, .aislash-editor-input-readonly, .ui-prompt-input-tiptap-readonly') ? 'human' : 'other');
       const item = { i: msgId(el), k };
-      if (k === 'human') item.t = (el.querySelector('.aislash-editor-input-readonly, .composer-human-message, .ui-prompt-input-tiptap-readonly') || el).innerText.trim();
-      else if (k === 'assistant') { const md = el.querySelector('.markdown-root'); item.h = md ? clean(md) : esc(el.innerText); }
-      else item.t = summary(el);
-      if (k === 'tool') { const f = toolFile(el); if (f) item.f = f; }
+      if (k === 'human') {
+        const src = el.querySelector('.composer-human-message, .ui-prompt-input-tiptap-readonly, .human-message-inline-body') || el;
+        item.t = src.innerText.trim();
+      } else if (k === 'assistant') {
+        const md = el.querySelector('.markdown-root');
+        item.h = md ? clean(md) : esc(el.innerText);
+      } else if (k === 'thinking') {
+        // Collapsed thinking group: innerText looks like "Thought\n8s\n8s". Strip the label and timing noise.
+        let txt = (el.innerText || '').replace(/^Thought\s*/i, '').replace(/\b\d+(\.\d+)?s\b/g, '').replace(/\s+/g, ' ').trim();
+        if (txt) item.t = txt;
+        else { item.t = '思考中…'; item.k = 'thinking'; }
+      } else if (k === 'tool') {
+        const f = toolFile(el);
+        if (f) { item.f = f; item.t = summary(el); }
+        else item.t = summary(el);
+      } else {
+        item.t = summary(el);
+      }
       const b = buttonsIn(el, false);
       if (b.length) item.b = b.map(x => x.label);
       return item;
     });
     const global = buttonsIn(panel, true).filter(x => !closestMsg(x.el) && !inQn(x.el)).map(x => x.label);
     const modeEl = [...document.querySelectorAll('.composer-unified-dropdown[data-mode]')].find(vis);
-    const modelEl = [...document.querySelectorAll('.ui-model-picker__trigger, .composer-unified-dropdown-model')].find(vis);
+    const modelEl = [...document.querySelectorAll('.vscode-model-picker__trigger-text')].find(e => vis(e) && e.innerText.trim())
+      || [...document.querySelectorAll('.ui-model-picker__trigger, .composer-unified-dropdown-model')].find(vis);
     return {
       rect: [r.x, r.y, r.width, r.height].map(Math.round),
       items,
@@ -572,8 +607,56 @@ function pageHelpers() {
     }));
   };
 
+  // Cursor 3.24.x renders the chat-history tree directly in the sidebar: a scroll area holds
+  // one <section.ui-sidebar-section> per project, with a section head (project name) followed by
+  // .ui-sidebar-menu-button-trigger rows (sessions). No button click is needed to read it.
+  const firstLine = el => (el.innerText || '').trim().split('\n')[0].trim();
+  const sessionTree = () => {
+    const sections = [...document.querySelectorAll('section.ui-sidebar-section, .ui-sidebar-section')].filter(vis);
+    const out = [];
+    for (const s of sections) {
+      const head = s.querySelector('[class*="section-head"]') || s.querySelector('.ui-sidebar-section-head');
+      const project = head ? firstLine(head) : '';
+      const seen = new Set();
+      const sessions = [];
+      for (const t of s.querySelectorAll('.ui-sidebar-menu-button-trigger')) {
+        if (!vis(t)) continue;
+        const name = firstLine(t);
+        if (!name || name === 'More' || seen.has(name)) continue;
+        seen.add(name);
+        sessions.push(name);
+      }
+      if (!project || !sessions.length) continue;
+      out.push({ project, sessions });
+    }
+    return out;
+  };
+  const sessionTarget = (project, name) => {
+    for (const s of [...document.querySelectorAll('section.ui-sidebar-section, .ui-sidebar-section')].filter(vis)) {
+      const head = s.querySelector('[class*="section-head"]') || s.querySelector('.ui-sidebar-section-head');
+      if (!head || firstLine(head) !== project) continue;
+      for (const t of s.querySelectorAll('.ui-sidebar-menu-button-trigger')) {
+        if (vis(t) && firstLine(t) === name) {
+          t.scrollIntoView({ block: 'nearest' });
+          return center(t);
+        }
+      }
+      return null;
+    }
+    return null;
+  };
+  // Each project shows its first few sessions plus a "More" row; clicking it expands the rest in place.
+  // Returns 1 if a "More" row was clicked (the caller re-reads the tree after React re-renders).
+  const expandMoreOnce = () => {
+    const more = [...document.querySelectorAll('.ui-sidebar-menu-button-trigger')].find(t => vis(t) && firstLine(t) === 'More');
+    if (!more) return 0;
+    more.scrollIntoView({ block: 'nearest' });
+    more.click();
+    return 1;
+  };
+
   return { extract, locate, panelRect, control, menuItems, menuItem, quickOpenRows, agentState, queueTarget, stopTarget, focusQueueEdit,
-    menuOpen, maxToggle, modelTarget, modelParams, paramTarget, subTarget, activeChatTab, tabTarget, hasComposer, filesState, fileTarget, questionTarget };
+    menuOpen, maxToggle, modelTarget, modelParams, paramTarget, subTarget, activeChatTab, tabTarget, hasComposer, filesState, fileTarget, questionTarget, historyPlane, scrollPlane, sessionTree, sessionTarget, expandMoreOnce };
 }
 
 const helpersCall = call => `(${pageHelpers.toString()})().${call}`;
@@ -605,6 +688,8 @@ class Session {
       this.lastChat = '';
       this.chatTimer = setInterval(() => this.pollChat().catch(() => {}), 700);
       await this.pollChat();
+      // Load the full transcript once the live panel is showing; deferred so it never blocks first render.
+      setTimeout(() => this.loadHistory().catch(() => {}), 300);
     } else {
       this.lastPanel = '';
       await this.sendPanelRect();
@@ -614,7 +699,7 @@ class Session {
   }
 
   async pollChat() {
-    if (!this.cdp || this.polling) return;
+    if (!this.cdp || this.polling || this.historyLoading) return;
     this.polling = true;
     try {
       const chat = await this.cdp.evaluate(helpersCall('extract()'));
@@ -858,6 +943,67 @@ class Session {
     const [x, y, w, h] = rect;
     await this.cdp.send('Input.dispatchMouseEvent', { type: 'mouseWheel', x: x + w / 2, y: y + h / 2, deltaX: 0, deltaY: dy });
     setTimeout(() => this.pollChat().catch(() => {}), 400);
+  }
+
+  // Walks the virtualized transcript from bottom (latest) to top, scrolling the main history plane up
+  // and merging every rendered message, deduped by data-message-id, into one full chat snapshot.
+  async loadHistory() {
+    if (!this.cdp || this.historyLoading) return;
+    this.historyLoading = true;
+    this.emit({ t: 'history', loading: true });
+    try {
+      // Jump to the very bottom first so the walk starts at the latest message.
+      await this.cdp.evaluate(helpersCall('scrollPlane(1e9)')).catch(() => {});
+      await new Promise(r => setTimeout(r, 150));
+      const collected = new Map();
+      let lastMeta = null;
+      let lastCount = -1, stall = 0;
+      for (let i = 0; i < 500; i++) {
+        const chat = await this.cdp.evaluate(helpersCall('extract()')).catch(() => null);
+        if (chat) {
+          lastMeta = chat;
+          for (const item of chat.items || []) {
+            const key = item.i || `${item.k}:${item.t || item.h || ''}`.slice(0, 200);
+            if (key && !collected.has(key)) collected.set(key, item);
+          }
+        }
+        const scroll = await this.cdp.evaluate(helpersCall('scrollPlane(-600)')).catch(() => null);
+        if (!scroll || scroll.top <= 0) break;
+        if (collected.size === lastCount) { if (++stall > 6) break; }
+        else { stall = 0; lastCount = collected.size; }
+        await new Promise(r => setTimeout(r, 220));
+      }
+      // Restore the bottom so the live view keeps showing the newest message.
+      await this.cdp.evaluate(helpersCall('scrollPlane(1e9)')).catch(() => {});
+      if (lastMeta) {
+        const items = [...collected.values()].reverse(); // oldest -> newest
+        this.emit({ t: 'chat', chat: { ...lastMeta, items } });
+      }
+    } finally {
+      this.historyLoading = false;
+      this.emit({ t: 'history', loading: false });
+    }
+  }
+
+  async listSessionTree() {
+    // Each project shows its first few sessions plus a "More" row; expand all of them so the
+    // tree is complete, then read it. Expanding is harmless (it just reveals more rows).
+    for (let i = 0; i < 20; i++) {
+      const clicked = await this.cdp.evaluate(helpersCall('expandMoreOnce()')).catch(() => 0);
+      if (!clicked) break;
+      await new Promise(r => setTimeout(r, 250));   // let React re-render the expanded rows
+    }
+    const tree = await this.cdp.evaluate(helpersCall('sessionTree()')).catch(() => null);
+    this.emit({ t: 'sessionTree', tree: tree || [] });
+  }
+
+  async openSession(project, name) {
+    const pos = await this.cdp.evaluate(helpersCall(`sessionTarget(${JSON.stringify(String(project))}, ${JSON.stringify(String(name))})`));
+    if (!pos) throw new Error('找不到该会话');
+    await this.tapCss(pos.x, pos.y);
+    await new Promise(r => setTimeout(r, 800));   // 等 Cursor 切换到新会话
+    this.emit({ t: 'status', ok: true, msg: '已切换到「' + name + '」' });
+    await this.loadHistory();                      // 加载新会话的历史
   }
 
   emit(obj) {
@@ -1123,6 +1269,9 @@ class Session {
       case 'changes': return this.listChanges();
       case 'change': return this.changeAction(msg.i, msg.name, msg.act);
       case 'scrollChat': return this.scrollChat(Number(msg.dy) || 0);
+      case 'loadHistory': return this.loadHistory();
+      case 'sessionTree': return this.listSessionTree();
+      case 'openSession': return this.openSession(String(msg.project ?? ''), String(msg.name ?? ''));
       case 'tap': return this.tap(msg.x, msg.y, msg.button);
       case 'wheel': return this.wheel(msg.x, msg.y, msg.dx || 0, msg.dy || 0);
       case 'key': return this.key(msg.key);
