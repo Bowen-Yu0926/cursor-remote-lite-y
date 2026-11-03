@@ -863,6 +863,7 @@ class Session {
       const json = JSON.stringify(chat);
       if (json !== this.lastChat) {
         this.lastChat = json;
+        console.log(`[pollChat] app=${this.app} items=${chat?.items?.length ?? 'null'}`);
         this.emit({ t: 'chat', chat });
       }
     } finally {
@@ -1281,6 +1282,7 @@ class Session {
     this.targetId = win.id;
     this.winTitle = win.title;
     this.app = win.app || 'cursor';   // route DOM helpers to the right app
+    console.log(`[attach] app=${this.app} title=${win.title} id=${win.id}`);
     cdp.onclose = () => {
       if (this.cdp === cdp) {
         this.cdp = null;
