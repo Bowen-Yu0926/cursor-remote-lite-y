@@ -1,6 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
-title Cursor Remote - Start
+title Cursor ^& opencode Remote
 cd /d "%~dp0"
 
 REM ============================================================
