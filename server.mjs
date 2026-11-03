@@ -1286,7 +1286,8 @@ class Session {
     cdp.onclose = () => {
       if (this.cdp === cdp) {
         this.cdp = null;
-        this.emit({ t: 'status', ok: false, msg: 'Cursor 窗口连接已断开' });
+        console.log(`[cdp] 窗口连接已断开 app=${this.app} title=${this.winTitle}`);
+        this.emit({ t: 'status', ok: false, msg: '窗口连接已断开，请重新选择应用' });
       }
     };
     cdp.on('Page.screencastFrame', p => this.onFrame(p));
@@ -1436,7 +1437,7 @@ class Session {
     if (msg.t === 'mode') return this.setMode(msg.mode);
     if (msg.t === 'visible') { this.visible = Boolean(msg.v); return; }
     if (msg.t === 'lang') { updateDevice(this.deviceId, { lang: msg.v === 'en' ? 'en' : 'zh' }); return; }
-    if (!this.cdp) throw new Error('尚未连接到 Cursor 窗口');
+    if (!this.cdp) throw new Error('尚未连接到窗口，请重新选择应用');
     switch (msg.t) {
       case 'openMenu': return this.openMenu(msg.kind);
       case 'pickMenu': return this.pickMenu(msg.kind, msg.label);
