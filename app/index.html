@@ -1074,8 +1074,15 @@ function renderItem(it) {
 const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight < 120;
 
 let lastChat = null;
+let running = false;
 function renderChat(chat) {
   lastChat = chat;
+  const busy = !!chat?.busy;
+  if (busy !== running) {
+    running = busy;
+    if (busy) status('Agent 正在执行中…');
+    else status('');
+  }
   $('empty').hidden = !!chat;
   $('older').hidden = !chat;
   $('pickMode').hidden = !chat?.mode;

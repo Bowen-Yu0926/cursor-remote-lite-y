@@ -758,9 +758,10 @@ function opencodeHelpers() {
       }
     }
     const r = document.documentElement.getBoundingClientRect();
+    const stopBtn = [...document.querySelectorAll('[aria-label="停止"]')].find(b => vis(b) && !b.disabled);
     return {
       rect: [r.x, r.y, r.width, r.height].map(Math.round),
-      items, global: [], busy: false, queued: [], subagents: [], changed: 0,
+      items, global: [], busy: !!stopBtn, queued: [], subagents: [], changed: 0,
       questions: null, readonly: false, mode: null, model: null,
     };
   };
