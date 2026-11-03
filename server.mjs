@@ -1754,26 +1754,33 @@ async function publishUrl(url) {
 }
 
 function startTunnel() {
-  const child = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] });
-  let shown = false;
-  const scan = buf => {
-    const m = !shown && String(buf).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
-    if (m) {
-      shown = true;
-      console.log(`\n公网地址：${m[0]}`);
-      saveState({ relayUrl: m[0] });
-      if (PUBLISH_REPO) publishUrl(m[0]);
-      else {
-        console.log('（每次重启地址都会变，配对过的手机需要重新配对；运行 npm run setup 可获得固定地址）');
-        offerFirstPairing();
+  let tunnel = null;
+  const spawnTunnel = () => {
+    tunnel = spawn('cloudflared', ['tunnel', '--no-autoupdate', '--url', `http://127.0.0.1:${PORT}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let shown = false;
+    const scan = buf => {
+      const m = !shown && String(buf).match(/https:\/\/[a-z0-9-]+\.trycloudflare\.com/);
+      if (m) {
+        shown = true;
+        console.log(`\n公网地址：${m[0]}`);
+        saveState({ relayUrl: m[0] });
+        if (PUBLISH_REPO) publishUrl(m[0]);
+        else {
+          console.log('（每次重启地址都会变，配对过的手机需要重新配对；运行 npm run setup 可获得固定地址）');
+          offerFirstPairing();
+        }
       }
-    }
+    };
+    tunnel.stdout.on('data', scan);
+    tunnel.stderr.on('data', scan);
+    tunnel.on('error', () => console.log('!! 找不到 cloudflared，请先运行：brew install cloudflared'));
+    tunnel.on('exit', code => {
+      console.log(`!! cloudflared 已退出 (code ${code})，5 秒后自动重试…`);
+      setTimeout(spawnTunnel, 5000);
+    });
   };
-  child.stdout.on('data', scan);
-  child.stderr.on('data', scan);
-  child.on('error', () => console.log('!! 找不到 cloudflared，请先运行：brew install cloudflared'));
-  child.on('exit', code => { console.log(`!! cloudflared 已退出 (code ${code})`); process.exit(1); });
-  const stop = () => { child.kill(); process.exit(0); };
+  spawnTunnel();
+  const stop = () => { tunnel?.kill(); process.exit(0); };
   process.on('SIGINT', stop);
   process.on('SIGTERM', stop);
 }
