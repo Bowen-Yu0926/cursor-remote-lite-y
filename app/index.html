@@ -16,25 +16,26 @@
 <title>Cursor Remote</title>
 <style>
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; background: #1e1e1e; color: #d4d4d4; font: 15px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  :root { --bg: #151515; --surface: #1f1f1f; --surface2: #2a2a2a; --border: #383838; --accent: #2563eb; --accent2: #3b82f6; --text: #e7e7e7; --dim: #9a9a9a; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif; }
   body { position: fixed; left: 0; top: 0; width: 100%; height: 100dvh; display: flex; flex-direction: column; overflow: hidden;
          padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
-  button, select, textarea, input { font: inherit; color: #e6e6e6; background: #2d2d2d; border: 1px solid #3c3c3c; border-radius: 8px; }
-  button { padding: 6px 12px; white-space: nowrap; cursor: pointer; }
-  button:active { filter: brightness(1.3); }
-  button.on, button.primary { background: #0e639c; border-color: #1177bb; color: #fff; }
+  button, select, textarea, input { font: inherit; color: var(--text); background: var(--surface2); border: 1px solid var(--border); border-radius: 9px; }
+  button { padding: 6px 12px; white-space: nowrap; cursor: pointer; transition: background .15s, border-color .15s; }
+  button:active { filter: brightness(1.25); }
+  button.on, button.primary { background: var(--accent); border-color: var(--accent2); color: #fff; }
   [hidden] { display: none !important; }
 
-  header { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: #252526; border-bottom: 1px solid #333; min-width: 0; }
-  #dot { width: 9px; height: 9px; border-radius: 50%; background: #c33; flex: none; }
-  #dot.ok { background: #3c3; }
-  #title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; background: none; border: none; padding: 4px 2px; text-align: left; color: #ccc; font-size: 14px; }
+  header { flex: none; display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); min-width: 0; }
+  #dot { width: 10px; height: 10px; border-radius: 50%; background: #e5484d; flex: none; box-shadow: 0 0 0 0 rgba(229,72,77,.5); }
+  #dot.ok { background: #30a46c; box-shadow: 0 0 8px rgba(48,164,108,.7); }
+  #title { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; background: none; border: none; padding: 4px 2px; text-align: left; color: var(--text); font-size: 14px; }
   #title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #title::after { content: "▾"; color: #888; flex: none; }
-  .seg { display: flex; flex: none; border: 1px solid #3c3c3c; border-radius: 8px; overflow: hidden; }
-  .seg button { border: none; border-radius: 0; padding: 5px 12px; background: #2d2d2d; }
-  .seg button.on { background: #0e639c; }
-  #menuBtn { flex: none; padding: 5px 10px; }
+  #title::after { content: "▾"; color: var(--dim); flex: none; }
+  .seg { display: flex; flex: none; background: var(--surface2); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; padding: 6px 14px; background: transparent; color: var(--dim); font-size: 13.5px; }
+  .seg button.on { background: var(--accent); color: #fff; }
+  #menuBtn { flex: none; padding: 5px 11px; }
 
   main { flex: 1; min-height: 0; position: relative; }
   .view { position: absolute; inset: 0; display: none; flex-direction: column; min-width: 0; }
@@ -107,26 +108,40 @@
   #ripple { position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; border: 2px solid #4af; pointer-events: none; opacity: 0; transition: opacity .4s; }
 
   /* composer */
-  footer { flex: none; background: #252526; border-top: 1px solid #333; padding: 6px 10px 8px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-  #chatTools { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; min-width: 0; }
+  footer { flex: none; background: var(--surface); border-top: 1px solid var(--border); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+  #chatTools { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; min-width: 0; }
   #chatTools::-webkit-scrollbar { display: none; }
-  #chatTools button { font-size: 12.5px; padding: 3px 10px; border-radius: 14px; flex: none; white-space: nowrap; }
+  #chatTools button { font-size: 13px; padding: 5px 14px; border-radius: 16px; flex: none; white-space: nowrap; color: var(--dim); background: var(--surface2); }
+  #chatTools button:active { color: var(--text); }
   .row { display: flex; gap: 8px; min-width: 0; align-items: flex-end; }
-  textarea { flex: 1; min-width: 0; min-height: 40px; max-height: 32vh; padding: 9px 10px; resize: none; font-size: 16px; line-height: 1.35; }
-  #img { flex: none; height: 40px; width: 40px; padding: 0; display: flex; align-items: center; justify-content: center; color: #bbb; }
+  textarea { flex: 1; min-width: 0; min-height: 42px; max-height: 32vh; padding: 10px 12px; resize: none; font-size: 15.5px; line-height: 1.4; border-radius: 11px; background: var(--surface2); }
+  textarea:focus { border-color: var(--accent2); outline: none; }
+  #img { flex: none; height: 42px; width: 42px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); background: var(--surface2); }
   #mic { display: none; }
-  body.voice #mic { flex: none; height: 40px; width: 40px; padding: 0; display: flex; align-items: center; justify-content: center; color: #bbb; }
-  #mic.on { color: #fff; background: #c33; border-color: #e55; animation: pulse 1.2s ease-in-out infinite; }
-  #send { flex: none; height: 40px; padding: 0 16px; background: #0e639c; border-color: #1177bb; color: #fff; font-weight: 600; }
-  #msg { font-size: 12px; color: #888; min-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #msg.err { color: #f77; }
+  body.voice #mic { flex: none; height: 42px; width: 42px; padding: 0; display: flex; align-items: center; justify-content: center; color: var(--dim); background: var(--surface2); }
+  #mic.on { color: #fff; background: #e5484d; border-color: #e5484d; animation: pulse 1.2s ease-in-out infinite; }
+  #send { flex: none; height: 42px; padding: 0 18px; background: var(--accent); border-color: var(--accent2); color: #fff; font-weight: 600; border-radius: 11px; }
+  #send:active { background: var(--accent2); }
+  #msg { font-size: 12px; color: var(--dim); min-height: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #msg.err { color: #e5484d; }
 
   /* bottom sheet */
   #shade { position: fixed; inset: 0; z-index: 30; background: #0008; display: none; }
   #shade.open { display: block; }
-  #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 31; background: #252526; border-radius: 14px 14px 0 0; padding: 12px 12px calc(14px + env(safe-area-inset-bottom)); max-height: 75dvh; overflow-y: auto; transform: translateY(105%); transition: transform .2s; }
+  #sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 31; background: var(--surface); border-radius: 16px 16px 0 0; padding: 14px 14px calc(16px + env(safe-area-inset-bottom)); max-height: 75dvh; overflow-y: auto; transform: translateY(105%); transition: transform .2s; }
   #sheet.open { transform: none; }
-  #sheet h3 { margin: 2px 4px 10px; font-size: 15px; color: #ccc; font-weight: 600; }
+  #sheet h3 { margin: 2px 4px 12px; font-size: 16px; color: var(--text); font-weight: 600; }
+  .appCards { display: flex; flex-direction: column; gap: 10px; }
+  .appCard { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px; border-radius: 14px; background: var(--surface2); text-align: left; margin-bottom: 0; }
+  .appCard:disabled { opacity: .45; }
+  .appCard:not(:disabled):active { border-color: var(--accent2); }
+  .appIcon { font-size: 24px; width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 12px; background: var(--accent); color: #fff; flex: none; }
+  .appInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .appInfo b { font-size: 16px; font-weight: 600; }
+  .appInfo i { font-style: normal; font-size: 12.5px; color: var(--dim); }
+  .appState { flex: none; font-size: 12px; font-weight: 600; }
+  .appState.on { color: #30a46c; }
+  .appState.off { color: var(--dim); }
   .treeGroup { margin-bottom: 8px; }
   .treeProj { font-size: 12px; color: #8ab4f8; margin: 8px 4px 4px; font-weight: 600; }
   .treeSess { padding-left: 22px !important; }
@@ -653,11 +668,16 @@ const APP_NAME = { cursor: 'Cursor', opencode: 'opencode' };
 // On open: always show the app picker first (Cursor / opencode), then jump to the chosen app's conversation.
 function pickAppAndAttach() {
   const apps = ['cursor', 'opencode'];
-  openSheet('pickApp', `<h3>选择要控制的应用</h3>`
+  const meta = { cursor: { icon: '⌘', desc: 'AI 代码编辑器' }, opencode: { icon: '◈', desc: 'OpenCode Agent' } };
+  openSheet('pickApp', `<h3>选择要控制的应用</h3><div class="appCards">`
     + apps.map(a => {
       const n = windows.filter(w => (w.app || 'cursor') === a).length;
-      return `<button class="opt" data-app="${a}" ${n ? '' : 'disabled'}><span class="lbl">${APP_NAME[a] || a}</span><span class="tag">${n ? n + ' 个窗口' : '未启动'}</span></button>`;
-    }).join(''));
+      return `<button class="appCard" data-app="${a}" ${n ? '' : 'disabled'}>
+        <span class="appIcon">${meta[a].icon}</span>
+        <span class="appInfo"><b>${APP_NAME[a] || a}</b><i>${n ? meta[a].desc + ' · ' + n + ' 个窗口' : meta[a].desc + ' · 未启动'}</i></span>
+        <span class="appState ${n ? 'on' : 'off'}">${n ? '● 在线' : '○ 离线'}</span>
+      </button>`;
+    }).join('') + `</div>`);
 }
 
 // Cursor titles look like "file.py — Folder [SSH: host]"; the window is identified by folder (+ host), not the open file.
