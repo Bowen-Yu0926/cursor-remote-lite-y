@@ -101,7 +101,7 @@ async function listWindows() {
     try {
       const ver = await (await fetch(`${base}/json/version`)).json();
       const ua = ver['User-Agent'] || '';
-      if (/OpenCodeDev/.test(ua)) app = 'opencode';
+      if (/OpenCode/.test(ua)) app = 'opencode';
       else if (/Cursor/.test(ua)) app = 'cursor';
     } catch { continue; }
     if (!app) continue;
