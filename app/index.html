@@ -314,6 +314,7 @@ let crop = store.get('crop') !== 'full';
 let frame = { w: 1000, h: 800 }, panel = null, zoom = 1, tapMode = 'tap', rightNext = false;
 let windows = [], currentWindow = null;
 let attachedOnce = false;
+let projectListMode = 'newChat';   // 'newChat' | 'history'
 
 // Keep the layout above the on-screen keyboard.
 function fitViewport() {
@@ -604,8 +605,11 @@ function connect() {
       $('older').textContent = m.loading ? '加载中…' : '↑ 加载更早的消息';
     }
     else if (m.t === 'menu') showMenu(m.kind, m.items, m.max);
-    else if (m.t === 'sessionTree') showSessionTree(m.tree);
-    else if (m.t === 'projectList') showProjectList(m.projects);
+    else if (m.t === 'projectList') {
+      if (projectListMode === 'history') showHistoryProjects(m.projects);
+      else showProjectList(m.projects);
+    }
+    else if (m.t === 'projectSessions') showProjectSessions(m.project, m.sessions);
     else if (m.t === 'params') showParams(m);
     else if (m.t === 'changes') showChanges(m);
     else if (m.t === 'file') showFile(m);
@@ -714,6 +718,22 @@ function showProjectList(projects) {
   if (!projects || !projects.length) return status('没有找到项目，可能 Cursor 版本不同', false);
   openSheet('projectList', `<h3>选择项目，新建对话</h3>`
     + projects.map(p => `<button class="opt" data-newproj="${esc(p)}"><span class="lbl">${esc(p)}</span><span class="tag">新建</span></button>`).join(''));
+}
+
+function showHistoryProjects(projects) {
+  status('');
+  if (!projects || !projects.length) return status('没有找到项目，可能 opencode 版本不同', false);
+  openSheet('historyProjects', `<h3>选择项目，查看历史会话</h3>`
+    + projects.map(p => `<button class="opt" data-hproj="${esc(p)}"><span class="lbl">${esc(p)}</span><span class="tag">查看会话</span></button>`).join(''));
+}
+
+function showProjectSessions(project, sessions) {
+  status('');
+  const rows = sessions && sessions.length
+    ? sessions.map(s => `<button class="opt treeSess" data-proj="${esc(project)}" data-sess="${esc(s)}"><span class="lbl">${esc(s)}</span></button>`).join('')
+    : '<div class="hint">该项目没有历史会话</div>';
+  openSheet('projectSessions', `<h3>${esc(project)} · 历史会话</h3>${rows}
+    <button class="opt" data-back="history"><span class="lbl">← 返回项目列表</span></button>`);
 }
 
 function showChanges(m) {
@@ -948,6 +968,14 @@ $('sheet').addEventListener('click', async e => {
     cache.clear(); itemsEl.replaceChildren(); lastChat = null;   // 新建对话，清空当前会话
     status('正在「' + b.dataset.newproj + '」新建对话…');
     return send({ t: 'newChatIn', project: b.dataset.newproj });
+  }
+  if (b.dataset.hproj) {
+    status('读取「' + b.dataset.hproj + '」的历史会话…');
+    return send({ t: 'projectSessions', project: b.dataset.hproj });
+  }
+  if (b.dataset.back === 'history') {
+    projectListMode = 'history';
+    return send({ t: 'projectList' });
   }
   if (b.dataset.histidx != null) {   // 点卡片：填入输入框
     const t = sendHistory()[Number(b.dataset.histidx)];
@@ -1206,8 +1234,8 @@ document.addEventListener('click', async e => {
 });
 
 $('pickMode').onclick = () => { status('读取模式列表…'); send({ t: 'openMenu', kind: 'mode' }); };
-$('pickHistory').onclick = () => { status(''); openHistorySheet(null); send({ t: 'sessionTree' }); };
-$('newChat').onclick = () => { status('读取项目列表…'); send({ t: 'projectList' }); };
+$('pickHistory').onclick = () => { projectListMode = 'history'; status(''); send({ t: 'projectList' }); };
+$('newChat').onclick = () => { projectListMode = 'newChat'; status('读取项目列表…'); send({ t: 'projectList' }); };
 
 /* ---------- file viewer ---------- */
 $('vBody').classList.toggle('wrap', store.get('wrap') !== 'off');

@@ -852,6 +852,24 @@ function opencodeHelpers() {
         .filter(Boolean);
       return [...new Set(projects)];
     },
+    projectTarget: project => {
+      for (const el of [...document.querySelectorAll('[class*="group/project"]')].filter(vis)) {
+        const lines = (el.innerText || '').trim().split('\n').map(s => s.trim()).filter(Boolean);
+        const name = lines.length > 1 ? lines[1] : lines[0];
+        if (name === project) {
+          el.scrollIntoView({ block: 'nearest' });
+          const btn = el.querySelector('button') || el;
+          const r = btn.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }
+      }
+      return null;
+    },
+    // Names of the sessions currently visible in the sidebar (the active project's sessions).
+    sessionNames: () => [...new Set(
+      [...document.querySelectorAll('[class*="group/session"]')].filter(vis)
+        .map(e => (e.innerText || '').trim().split('\n')[0].trim()).filter(Boolean)
+    )],
     newChatTarget: () => null,
   };
 }
@@ -1225,6 +1243,15 @@ class Session {
     this.emit({ t: 'projectList', projects: projects || [] });
   }
 
+  async listProjectSessions(project) {
+    const pos = await this.cdp.evaluate(this.hcall(`projectTarget(${JSON.stringify(String(project))})`));
+    if (!pos) { this.emit({ t: 'projectSessions', project, sessions: [] }); return; }
+    await this.tapCss(pos.x, pos.y);
+    await new Promise(r => setTimeout(r, 400));   // let the project's sessions render
+    const sessions = await this.cdp.evaluate(this.hcall('sessionNames()')).catch(() => null);
+    this.emit({ t: 'projectSessions', project, sessions: sessions || [] });
+  }
+
   async newChatIn(project) {
     const pos = await this.cdp.evaluate(this.hcall(`newChatTarget(${JSON.stringify(String(project))})`));
     if (!pos) throw new Error('找不到该项目的「新建」按钮');
@@ -1506,6 +1533,7 @@ class Session {
       case 'sessionTree': return this.listSessionTree();
       case 'openSession': return this.openSession(String(msg.project ?? ''), String(msg.name ?? ''));
       case 'projectList': return this.listProjects();
+      case 'projectSessions': return this.listProjectSessions(String(msg.project ?? ''));
       case 'newChatIn': return this.newChatIn(String(msg.project ?? ''));
       case 'tap': return this.tap(msg.x, msg.y, msg.button);
       case 'wheel': return this.wheel(msg.x, msg.y, msg.dx || 0, msg.dy || 0);
