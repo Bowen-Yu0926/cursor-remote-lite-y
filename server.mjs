@@ -834,7 +834,7 @@ class Session {
     this.idleTimer = setInterval(() => this.pollIfIdle(), 2000);
   }
 
-  hcall(call) { return this.hcall(this.app, call); }
+  hcall(call) { return helpersCall(this.app, call); }
 
   async setMode(mode) {
     this.mode = mode === 'screen' ? 'screen' : 'chat';
