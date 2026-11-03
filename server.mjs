@@ -745,7 +745,15 @@ function opencodeHelpers() {
     let n = 0;
     for (const el of root.children) {
       const text = (el.innerText || '').trim();
-      if (!text || text === '已探索') continue;
+      if (!text) continue;
+      // Tool/activity card ("已探索"): show just its label, skip the animated digit strip.
+      const toolLabel = el.querySelector('[data-slot="context-tool-group-label"], [data-component="tool-status-title"]');
+      if (toolLabel) {
+        const label = (toolLabel.innerText || '').trim().split('\n')[0].trim() || '工具';
+        items.push({ i: 't' + (n++), k: 'tool', t: label });
+        continue;
+      }
+      if (text === '已探索') continue;
       const metaEl = [...el.querySelectorAll('.text-12-regular')].find(m => /·\s*(cn:|gpt-|claude-|deepseek)/i.test(m.innerText || ''));
       if (metaEl) {
         // User message: strip the "agent · model · time" metadata from the end.
