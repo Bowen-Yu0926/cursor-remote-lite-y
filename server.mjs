@@ -802,8 +802,13 @@ function opencodeHelpers() {
     sessionTarget: () => null,
     expandMoreOnce: () => 0,
     projectList: () => {
+      // Each project row is "C\ncursor-remote\nE:\cursor-remote": line 0 is the icon letter, line 1 is the name.
       const projects = [...document.querySelectorAll('[class*="group/project"]')].filter(vis)
-        .map(e => (e.innerText || '').trim().split('\n')[0].trim()).filter(Boolean);
+        .map(e => {
+          const lines = (e.innerText || '').trim().split('\n').map(s => s.trim()).filter(Boolean);
+          return lines.length > 1 ? lines[1] : (lines[0] || '');
+        })
+        .filter(Boolean);
       return [...new Set(projects)];
     },
     newChatTarget: () => null,
