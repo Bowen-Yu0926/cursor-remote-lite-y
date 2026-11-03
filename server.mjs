@@ -795,12 +795,53 @@ function opencodeHelpers() {
     historyPlane: () => null,
     scrollPlane: () => null,
     sessionTree: () => {
-      const sessions = [...document.querySelectorAll('[class*="group/session"]')].filter(vis)
-        .map(e => (e.innerText || '').trim().split('\n')[0].trim()).filter(Boolean);
-      return sessions.length ? [{ project: 'opencode', sessions: [...new Set(sessions)] }] : [];
+      // Sidebar lists projects and their sessions in DOM order: a project row (group/project)
+      // is followed by its sessions (group/session) until the next project row.
+      const out = [];
+      let current = null;
+      const nodes = [...document.querySelectorAll('[class*="group/project"], [class*="group/session"]')].filter(vis);
+      for (const el of nodes) {
+        const cls = (el.className || '').toString();
+        if (cls.includes('group/project')) {
+          const lines = (el.innerText || '').trim().split('\n').map(s => s.trim()).filter(Boolean);
+          const name = lines.length > 1 ? lines[1] : lines[0];
+          if (name) { current = name; out.push({ project: name, sessions: [] }); }
+        } else if (cls.includes('group/session') && current) {
+          const name = (el.innerText || '').trim().split('\n')[0].trim();
+          if (name && !out[out.length - 1].sessions.includes(name)) out[out.length - 1].sessions.push(name);
+        }
+      }
+      return out;
     },
-    sessionTarget: () => null,
-    expandMoreOnce: () => 0,
+    sessionTarget: (project, name) => {
+      for (const el of [...document.querySelectorAll('[class*="group/session"]')].filter(vis)) {
+        const n = (el.innerText || '').trim().split('\n')[0].trim();
+        if (n === name) {
+          el.scrollIntoView({ block: 'nearest' });
+          const btn = el.querySelector('button') || el;
+          const r = btn.getBoundingClientRect();
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+        }
+      }
+      return null;
+    },
+    expandMoreOnce: () => {
+      // Click a project row that has no visible sessions yet (its sessions are collapsed).
+      const nodes = [...document.querySelectorAll('[class*="group/project"], [class*="group/session"]')].filter(vis);
+      for (let i = 0; i < nodes.length; i++) {
+        const cls = (nodes[i].className || '').toString();
+        if (!cls.includes('group/project')) continue;
+        const next = nodes[i + 1];
+        const nextIsSession = next && (next.className || '').toString().includes('group/session');
+        if (!nextIsSession) {
+          const btn = nodes[i].querySelector('button') || nodes[i];
+          btn.scrollIntoView({ block: 'nearest' });
+          btn.click();
+          return 1;
+        }
+      }
+      return 0;
+    },
     projectList: () => {
       // Each project row is "C\ncursor-remote\nE:\cursor-remote": line 0 is the icon letter, line 1 is the name.
       const projects = [...document.querySelectorAll('[class*="group/project"]')].filter(vis)
