@@ -14,6 +14,10 @@ import {
 } from './auth.mjs';
 import { pushPublicKey, openEventStream, closeEventStreams, addViewer, removeViewer, deliver, startWatcher } from './notify.mjs';
 
+// Keep the relay alive on any unexpected error instead of the window crashing; log details for diagnosis.
+process.on('uncaughtException', e => console.error('!! 未捕获异常：', e?.message, e?.stack));
+process.on('unhandledRejection', r => console.error('!! 未处理的 Promise 拒绝：', r));
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 3939);
 const HOST = process.env.HOST || '0.0.0.0';
@@ -139,7 +143,8 @@ class Cdp {
         this.onclose?.();
       };
       ws.onmessage = ev => {
-        const msg = JSON.parse(ev.data);
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }   // ignore non-JSON frames instead of crashing
         if (msg.id && this.pending.has(msg.id)) {
           const { resolve, reject } = this.pending.get(msg.id);
           this.pending.delete(msg.id);
