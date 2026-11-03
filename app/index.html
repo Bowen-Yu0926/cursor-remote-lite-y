@@ -646,20 +646,13 @@ const RISKY = /^(stop|reject|deny|undo|discard|revert|cancel|delete|remove|停�
 const KIND_TAG = { agents: 'Agents', ssh: 'SSH', local: '本地' };
 const APP_NAME = { cursor: 'Cursor', opencode: 'opencode' };
 
-// On open: if both Cursor and opencode windows exist, ask which app to control; otherwise attach directly.
+// On open: always show the app picker first (Cursor / opencode), then jump to the chosen app's conversation.
 function pickAppAndAttach() {
-  if (!windows.length) return;
-  const apps = [...new Set(windows.map(w => w.app || 'cursor'))];
-  if (apps.length <= 1) {
-    const saved = store.get('window');
-    const win = windows.find(w => w.id === saved) || windows[0];
-    if (win) send({ t: 'attach', id: win.id });
-    return;
-  }
+  const apps = ['cursor', 'opencode'];
   openSheet('pickApp', `<h3>选择要控制的应用</h3>`
     + apps.map(a => {
       const n = windows.filter(w => (w.app || 'cursor') === a).length;
-      return `<button class="opt" data-app="${esc(a)}"><span class="lbl">${esc(APP_NAME[a] || a)}</span><span class="tag">${n} 个窗口</span></button>`;
+      return `<button class="opt" data-app="${a}" ${n ? '' : 'disabled'}><span class="lbl">${APP_NAME[a] || a}</span><span class="tag">${n ? n + ' 个窗口' : '未启动'}</span></button>`;
     }).join(''));
 }
 
@@ -922,9 +915,10 @@ $('sheet').addEventListener('click', async e => {
   if (!b) return;
   if (b.dataset.win) { closeSheet(); return send({ t: 'attach', id: b.dataset.win }); }
   if (b.dataset.app) {
-    closeSheet();
     const win = windows.find(w => (w.app || 'cursor') === b.dataset.app);
-    if (win) send({ t: 'attach', id: win.id });
+    if (!win) { status(APP_NAME[b.dataset.app] + ' 未启动，请先打开它', false); return; }
+    closeSheet();
+    send({ t: 'attach', id: win.id });
     return;
   }
   if (b.dataset.kind) { closeSheet(); status('切换中…'); return send({ t: 'pickMenu', kind: b.dataset.kind, label: b.dataset.label }); }
