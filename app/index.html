@@ -231,7 +231,7 @@
     <div id="list">
       <button id="older">↑ 加载更早的消息</button>
       <div id="items"></div>
-      <div id="empty" hidden>没找到聊天面板。<br>请在 Cursor 里打开 Agent 对话，或切到「画面」查看。</div>
+      <div id="empty" hidden>没找到聊天面板。<br>请在 Cursor 或 opencode 里打开 Agent 对话，或切到「画面」查看。</div>
     </div>
     <button id="toBottom">↓ 最新</button>
     <div id="qnBar"></div>
@@ -270,7 +270,7 @@
     <button id="newChat">＋ 新建</button>
   </div>
   <div class="row">
-    <textarea id="text" rows="1" placeholder="发给 Cursor Agent…" enterkeyhint="send"></textarea>
+    <textarea id="text" rows="1" placeholder="发给 Agent…" enterkeyhint="send"></textarea>
     <button id="img" title="附加图片" aria-label="附加图片"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg></button>
     <input id="imgFile" type="file" accept="image/*" hidden>
     <button id="mic" title="语音输入" aria-label="语音输入"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
@@ -697,7 +697,7 @@ $('title').onclick = () => { send({ t: 'windows' }); showWindows(); };
 
 const MENU_TITLE = { mode: '选择模式', model: '选择模型', history: '历史对话' };
 function showMenu(kind, items, max) {
-  if (!items.length) return status('菜单是空的，可能 Cursor 版本不同', false);
+  if (!items.length) return status('菜单是空的，可能版本不同', false);
   status('');
   const maxRow = typeof max === 'boolean'
     ? `<button class="opt" data-max><span class="lbl">MAX Mode<span class="sub">更大上下文、更贵</span></span><span class="switch ${max ? 'on' : ''}"></span></button>` : '';
@@ -735,7 +735,7 @@ function showSessionTree(tree) {
 
 function showProjectList(projects) {
   status('');
-  if (!projects || !projects.length) return status('没有找到项目，可能 Cursor 版本不同', false);
+  if (!projects || !projects.length) return status('没有找到项目，可能版本不同', false);
   openSheet('projectList', `<h3>选择项目，新建对话</h3>`
     + projects.map(p => `<button class="opt" data-newproj="${esc(p)}"><span class="lbl">${esc(p)}</span><span class="tag">新建</span></button>`).join(''));
 }
@@ -772,7 +772,7 @@ function showParams(m) {
   status('');
   openSheet('params', `<h3>${esc(m.label || '模型')} 参数</h3>` + m.sections.map(s => `<div class="pSec">${esc(s.title)}</div><div class="pRow">`
     + s.items.map(it => `<button class="${it.checked ? 'on' : ''} ${it.toggle ? 'tg' : ''}" data-model="${esc(m.model)}" data-plabel="${esc(m.label)}" data-section="${esc(s.title)}" data-value="${esc(it.label)}">${esc(it.label)}${it.toggle ? (it.checked ? '：开' : '：关') : ''}</button>`).join('')
-    + '</div>').join('') + '<div class="hint">改动会直接应用到电脑上 Cursor 的这个模型。</div>');
+    + '</div>').join('') + '<div class="hint">改动会直接应用到电脑上的这个模型。</div>');
 }
 
 let installEvent = null;
@@ -1286,7 +1286,7 @@ function showFile(m) {
   $('vPath').textContent = m.path ? '\u200e' + (m.host ? m.host + ':' : '') + m.path + (m.size != null ? ` · ${fmtSize(m.size)}` : '') : '';
   const body = $('vBody');
   if (m.error) {
-    body.innerHTML = `<div class="note err">${esc(m.error)}</div><div class="note">可以切到「画面」在 Cursor 里打开</div>`;
+    body.innerHTML = `<div class="note err">${esc(m.error)}</div><div class="note">可以切到「画面」在应用里打开</div>`;
     return;
   }
   if (m.image) {
