@@ -932,7 +932,10 @@ class Session {
     if (!this.cdp || this.polling || this.historyLoading) return;
     this.polling = true;
     try {
-      const chat = await this.cdp.evaluate(this.hcall('extract()'));
+      const chat = await Promise.race([
+        this.cdp.evaluate(this.hcall('extract()')),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('pollChat timeout')), 4000)),
+      ]);
       const json = JSON.stringify(chat);
       if (json !== this.lastChat) {
         this.lastChat = json;
@@ -1708,6 +1711,16 @@ const server = http.createServer(async (req, res) => {
 
 const wss = new WebSocketServer({ noServer: true, maxPayload: 4 << 20 });
 
+// 心跳保活：Cloudflare 空闲约 100s 会断开 WebSocket。定期 ping，收不到 pong 就关闭连接，
+// 触发客户端 onclose 重连（重连后客户端会自动重新 attach，见 app/index.html）。
+setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) { ws.terminate(); continue; }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 30000);
+
 server.on('upgrade', (req, socket, head) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname !== '/ws' || !originAllowed(req)) {
@@ -1719,6 +1732,8 @@ server.on('upgrade', (req, socket, head) => {
 
 // The token arrives as the first message rather than in the URL, so it never shows up in proxy logs.
 wss.on('connection', (ws, req) => {
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
   let session = null;
   const authTimer = setTimeout(() => ws.close(4001, 'auth timeout'), 5000);
   let queue = Promise.resolve();

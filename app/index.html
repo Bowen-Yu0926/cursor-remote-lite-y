@@ -590,6 +590,9 @@ function connect() {
         store.set('window', fromNotice);
         attachedOnce = true;
         send({ t: 'attach', id: fromNotice });
+      } else if (attachedOnce && store.get('window')) {
+        // 重连后自动恢复到上次的窗口，否则服务端新会话没有 attach，消息就不会继续刷新。
+        send({ t: 'attach', id: store.get('window') });
       }
       // 无通知时，等 windows 返回后弹「选择应用」再 attach
       sentWidth = 0;
